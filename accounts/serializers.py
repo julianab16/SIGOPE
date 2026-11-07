@@ -1,3 +1,6 @@
+import re
+import secrets
+
 from django.contrib.auth import authenticate
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
@@ -21,12 +24,20 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ("id", "username", "full_name", "document", "role", "is_active", "password")
-        read_only_fields = ("id",)
+        read_only_fields = ("id", "username")
 
     def create(self, validated_data):
         password = validated_data.pop("password", None)
+        document = validated_data["document"]
+        initials = "".join(
+            part[0] for part in re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+", validated_data["full_name"])
+        ).lower()
+        username = f"{document}{initials}"
+        if User.objects.filter(username=username).exists():
+            username = f"{username}{secrets.token_hex(2)}"
+        validated_data["username"] = username
         user = User(**validated_data)
-        user.set_password(password or User.objects.make_random_password())
+        user.set_password(password or secrets.token_urlsafe(18))
         user.save()
         return user
 

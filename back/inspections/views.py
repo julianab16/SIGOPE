@@ -1,10 +1,15 @@
-from rest_framework import viewsets
+from django.db import IntegrityError, transaction
+from django.utils import timezone
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
+from rest_framework.response import Response
 
 from accounts.models import AccessLevel, Module, User
 from accounts.permissions import HasModulePermission
 
-from .models import Inspection
-from .serializers import InspectionSerializer
+from .models import EquipmentCheckIn, Inspection
+from .serializers import CheckInSerializer, InspectionSerializer
 
 # Roles que supervisan y por eso ven las inspecciones de todos.
 SUPERVISOR_ROLES = (User.Role.ADMINISTRADOR, User.Role.JEFE_TALLER, User.Role.SST)
@@ -30,3 +35,43 @@ class InspectionViewSet(viewsets.ModelViewSet):
             or user.access_level(Module.INSPECTIONS) == AccessLevel.VIEW
         )
         return queryset if sees_all else queryset.filter(performed_by=user)
+
+
+class CheckInViewSet(viewsets.ModelViewSet):
+    serializer_class = CheckInSerializer
+    permission_classes = (HasModulePermission,)
+    module = Module.INSPECTIONS
+    http_method_names = ("get", "post", "head", "options")
+
+    def get_queryset(self):
+        queryset = EquipmentCheckIn.objects.select_related("equipment", "equipment__equipment_type", "operator")
+        if self.request.user.is_admin or self.request.user.access_level(Module.INSPECTIONS) == AccessLevel.VIEW:
+            return queryset
+        return queryset.filter(operator=self.request.user)
+
+    @transaction.atomic
+    def perform_create(self, serializer):
+        equipment = serializer.validated_data["equipment"]
+        # Serialize concurrent attempts against the same equipment row.
+        from catalog.models import Equipment
+        equipment = Equipment.objects.select_for_update().get(pk=equipment.pk)
+        if equipment.status != Equipment.Status.USABLE:
+            raise ValidationError({"equipment": "El equipo no está disponible."})
+        if EquipmentCheckIn.objects.filter(equipment=equipment, closed_at__isnull=True).exists():
+            raise ValidationError({"equipment": "El equipo ya tiene un check-in abierto."})
+        serializer.save(equipment=equipment)
+
+    @action(detail=True, methods=("post",))
+    @transaction.atomic
+    def close(self, request, pk=None):
+        checkin = self.get_object()
+        if checkin.operator_id != request.user.pk:
+            raise ValidationError("Solo el operario que inició el uso puede cerrarlo.")
+        if checkin.closed_at:
+            raise ValidationError("El check-in ya está cerrado.")
+        try:
+            checkin.closed_at = timezone.now()
+            checkin.save(update_fields=("closed_at",))
+        except IntegrityError as exc:
+            raise ValidationError("No se pudo cerrar el check-in.") from exc
+        return Response(self.get_serializer(checkin).data, status=status.HTTP_200_OK)

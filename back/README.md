@@ -71,7 +71,9 @@ tienen acceso total.
 | `users` | Usuarios y roles | `/api/accounts/users/`, `/api/accounts/roles/` |
 | `catalogs` | Catálogos y listas | `/api/catalog/...` (también se pueden **leer** con acceso a `inspections`) |
 | `inspections` | Inspecciones | `/api/inspections/records/` |
-| `incidents`, `maintenance`, `sst`, `documents`, `reports` | Resto de módulos | Reservados para próximas historias |
+| `incidents` | Novedades e incidentes | `/api/news/`, `/api/incidents/` y `/api/inspections/evidence/` |
+| `maintenance` | Mantenimientos | `/api/maintenance/` |
+| `sst`, `documents`, `reports` | Resto de módulos | Reservados para próximas historias |
 
 Las respuestas de error siguen el formato `{"error": {...}}`. Los errores de
 un campo vienen con el nombre del campo; los generales, en `detail` o
@@ -144,10 +146,10 @@ Body para crear (`password` es opcional):
 
 ```json
 {
-    "username": "operario01",
     "full_name": "Operario Uno",
     "document": "100000001",
-    "role": "operario"
+    "role": "operario",
+    "licenses": ["B1", "C1"]
 }
 ```
 
@@ -160,7 +162,7 @@ Salida de usuario:
 ```json
 {
     "id": 2,
-    "username": "operario01",
+    "username": "o100000001u",
     "full_name": "Operario Uno",
     "document": "100000001",
     "role": "operario",
@@ -239,7 +241,7 @@ Body para crear o modificar:
 
 ```json
 {
-    "identifier": "CAR-1",
+    "number": 1,
     "plate": "ABC123",
     "equipment_type": 1,
     "status": "usable",
@@ -250,7 +252,9 @@ Body para crear o modificar:
 }
 ```
 
-`status` puede ser `usable` (Disponible), `en_mantenimiento` (En
+`identifier` se genera como las tres primeras letras del tipo y el número
+elegido, con tres dígitos: por ejemplo, `COM-001`. El número aceptado va de 1
+a 999. `status` puede ser `usable` (Disponible), `en_mantenimiento` (En
 mantenimiento) o `no_usable` (Fuera de servicio). El `identifier` se guarda
 en mayúsculas, no se repite y no se puede cambiar después de crear el equipo;
 la placa tampoco se repite. La salida incluye además `equipment_type_name`,
@@ -265,7 +269,7 @@ Módulo `catalogs`.
 | Recurso | Métodos disponibles | Body de creación |
 | --- | --- | --- |
 | Categorías | `GET`, `POST`, `GET/{id}`, `PATCH/{id}`, `DELETE/{id}` | `{"name":"Motor", "is_active":true}` |
-| Ítems | `GET`, `POST`, `GET/{identifier}`, `PATCH/{identifier}`, `DELETE/{identifier}` | `{"identifier":"ITEM-001", "name":"Revisar aceite", "category":1, "is_critical":true, "is_active":true}` |
+| Ítems | `GET`, `POST`, `GET/{identifier}`, `PATCH/{identifier}`, `DELETE/{identifier}` | `{"name":"Revisar aceite", "category":1, "is_critical":true, "is_active":true}`; el identifier se genera automáticamente |
 
 Normalmente no hace falta usarlos directamente: al guardar una lista por
 secciones, las categorías e ítems se crean solos.
@@ -347,21 +351,21 @@ Ejemplo de respuesta de inspección:
  "result": "does_not_comply", "notes": "Fuga detectada"}], "general_notes": "Equipo detenido"}
 ```
 
-Ejemplo de detalle de novedad o incidente (campos disponibles actualmente):
+Ejemplo de detalle de novedad o incidente:
 
 ```json
 {"id": 12, "equipment": "CAR-1", "equipment_code": "CAR-1", "equipment_type": "Cargador",
  "performed_by": 7, "reporter_id": 7, "reporter_name": "Ana Pérez",
- "performed_at": "2026-06-18T09:30:00-05:00", "general_notes": "Descripción registrada"}
+ "performed_at": "2026-06-18T09:30:00-05:00", "tipo": "damage", "description": "Descripción registrada", "estado": "reported"}
 ```
 
-Novedades e incidentes devuelven los campos presentes en sus modelos iniciales:
-descripción (`general_notes`), equipo, reportante y fecha. Hoy no existen
-catálogos/campos de estado, severidad, categoría, adjuntos, afectaciones ni
-relaciones con inspecciones/entre novedades e incidentes. Por ello no se
-inventan; pedir `estado` o `severidad` para esos recursos devuelve `400`.
-Tampoco hay paginación configurada globalmente, así que se mantiene el contrato
-actual de listas.
+Novedades aceptan los tipos `mechanical_failure`, `unsafe_condition`, `damage` y
+`environmental`. Incidentes aceptan severidad `leve`, `media` o `grave` y una
+fecha/hora manual `occurred_at`. Ambos recursos tienen estado (`reported`,
+`in_review`, `in_progress` cuando aplica, `resolved`/`closed`) y guardan
+automáticamente el usuario autenticado y la fecha de registro. Las licencias
+del operario se envían como `licenses` (`B1`, `C2`, `C1`) y cada tipo de equipo
+puede declarar `required_license`.
 
 ### Registros de inspección
 
@@ -398,6 +402,202 @@ usuario autenticado se guarda como `performed_by` y la versión como
 - OpenAPI JSON: `GET /api/schema/`
 - Swagger UI: `GET /api/docs/`
 
+### Referencia completa de endpoints
+
+Todos los ejemplos siguientes parten de estas variables de shell:
+
+```bash
+BASE=http://localhost:8000
+TOKEN="<access>"
+AUTH="Authorization: Bearer $TOKEN"
+```
+
+#### Autenticación y sesión
+
+| Método | Endpoint | Uso |
+| --- | --- | --- |
+| `POST` | `/api/auth/login/` | Iniciar sesión con `username` o cédula y `password`. |
+| `POST` | `/api/auth/refresh/` | Renovar el access token con `refresh`. |
+| `POST` | `/api/accounts/logout/` | Invalidar el refresh token; el body es opcional. |
+| `GET` | `/api/accounts/me/` | Consultar la sesión y permisos actuales. |
+| `POST` | `/api/accounts/me/change-password/` | Cambiar la contraseña actual. |
+
+```bash
+curl -X POST "$BASE/api/auth/login/" -H 'Content-Type: application/json' \
+    -d '{"username":"100000001","password":"Operario-password-123"}'
+
+curl -X GET "$BASE/api/accounts/me/" -H "$AUTH"
+
+curl -X POST "$BASE/api/accounts/me/change-password/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"current_password":"Temporal-123","new_password":"Nueva-segura-456"}'
+```
+
+#### Usuarios y roles
+
+| Método | Endpoint | Body o parámetros |
+| --- | --- | --- |
+| `GET`, `POST` | `/api/accounts/users/` | Lista o crea usuarios. Filtros: `role`, `is_active`, `search`. |
+| `GET`, `PATCH`, `DELETE` | `/api/accounts/users/{id}/` | Consulta, actualiza o desactiva lógicamente un usuario. |
+| `POST` | `/api/accounts/users/{id}/reset-password/` | Genera una contraseña temporal. |
+| `GET`, `POST` | `/api/accounts/roles/` | Lista o crea roles adicionales. |
+| `GET`, `PATCH`, `DELETE` | `/api/accounts/roles/{id}/` | Consulta, actualiza o elimina un rol no base. |
+| `PUT` | `/api/accounts/roles/{id}/permissions/` | Reemplaza el mapa de permisos. |
+
+```bash
+curl -X POST "$BASE/api/accounts/users/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"full_name":"Operario Uno","document":"100000001","role":"operario","licenses":["B1","C1"]}'
+
+curl -X POST "$BASE/api/accounts/roles/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"name":"Auditor","read_only":true}'
+
+curl -X PUT "$BASE/api/accounts/roles/6/permissions/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"inspections":"view","incidents":"view"}'
+```
+
+#### Catálogo de equipos y listas
+
+| Método | Endpoint | Body o parámetros |
+| --- | --- | --- |
+| `GET`, `POST` | `/api/catalog/equipment-types/` | Lista o crea tipos; `required_license` puede ser `B1`, `C2`, `C1` o vacío. |
+| `GET`, `PATCH`, `DELETE` | `/api/catalog/equipment-types/{id}/` | Consulta, actualiza o elimina un tipo sin equipos asociados. |
+| `POST` | `/api/catalog/equipment-types/{id}/deactivate/` | Desactiva un tipo. |
+| `GET`, `POST` | `/api/catalog/equipments/` | Lista o crea equipos. |
+| `GET`, `PATCH`, `DELETE` | `/api/catalog/equipments/{identifier}/` | Consulta, actualiza o elimina un equipo según sus relaciones. |
+| `GET`, `POST` | `/api/catalog/item-categories/` | Lista o crea categorías. |
+| `GET`, `PATCH`, `DELETE` | `/api/catalog/item-categories/{id}/` | Administra categorías. |
+| `GET`, `POST` | `/api/catalog/items/` | Lista o crea ítems de checklist. |
+| `GET`, `PATCH`, `DELETE` | `/api/catalog/items/{identifier}/` | Administra ítems. |
+| `GET`, `POST` | `/api/catalog/checklists/` | Lista o crea listas versionadas. |
+| `GET`, `PATCH`, `DELETE` | `/api/catalog/checklists/{identifier}/` | Consulta, actualiza o elimina una lista. |
+| `GET` | `/api/catalog/checklists/{identifier}/versions/` | Consulta las versiones publicadas. |
+
+```bash
+curl -X POST "$BASE/api/catalog/equipment-types/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"name":"Camionetas","description":"Vehículos livianos","required_license":"B1","is_active":true}'
+
+curl -X POST "$BASE/api/catalog/equipments/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"identifier":"CAM-01","plate":"ABC123","equipment_type":1,"status":"usable","model":"Toyota Hilux","serial_number":"SER-01","year":2024,"hour_meter":"120"}'
+
+curl -X POST "$BASE/api/catalog/checklists/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"equipment_types":[1],"sections":[{"title":"Motor","items":[{"text":"Revisar aceite","is_critical":true}]}]}'
+```
+
+#### Check-ins e inspecciones
+
+| Método | Endpoint | Body o parámetros |
+| --- | --- | --- |
+| `GET`, `POST` | `/api/inspections/checkins/` | Consulta o inicia el uso de un equipo. |
+| `GET` | `/api/inspections/checkins/{id}/` | Consulta un check-in. |
+| `POST` | `/api/inspections/checkins/{id}/close/` | Cierra el check-in del operario autenticado. |
+| `GET`, `POST` | `/api/inspections/records/` | Lista o registra inspecciones. |
+| `GET`, `PATCH`, `DELETE` | `/api/inspections/records/{id}/` | Consulta, cambia el estado o elimina una inspección según permisos. |
+
+```bash
+curl -X POST "$BASE/api/inspections/checkins/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"equipment":"CAM-01","hour_meter_start":120}'
+
+curl -X POST "$BASE/api/inspections/records/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"equipment":"CAM-01","checklist":"CHK-CAMIONETAS","responses":[{"item":"ITEM-01","result":"complies","notes":"Sin novedades"}]}'
+
+curl -X POST "$BASE/api/inspections/checkins/10/close/" -H "$AUTH"
+```
+
+El operario autenticado se guarda como `performed_by`. Si el tipo de equipo
+requiere una licencia, el usuario debe tenerla en `licenses`; de lo contrario
+el check-in y la inspección responden `400` con un mensaje explicativo.
+
+#### Novedades e incidentes
+
+| Método | Endpoint | Body o parámetros |
+| --- | --- | --- |
+| `GET`, `POST` | `/api/news/` | Lista o registra novedades. |
+| `GET`, `PATCH`, `DELETE` | `/api/news/{id}/` | Consulta o administra una novedad según permisos. |
+| `GET`, `POST` | `/api/incidents/` | Lista o registra incidentes. |
+| `GET`, `PATCH`, `DELETE` | `/api/incidents/{id}/` | Consulta o administra un incidente según permisos. |
+
+```bash
+curl -X POST "$BASE/api/news/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"equipment":"CAM-01","tipo":"damage","description":"Golpe en la puerta derecha"}'
+
+curl -X POST "$BASE/api/incidents/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"equipment":"CAM-01","description":"Falla durante la operación","severidad":"grave","occurred_at":"2026-11-16T08:30:00-05:00"}'
+
+curl "$BASE/api/incidents/?estado=reported&severidad=grave" -H "$AUTH"
+```
+
+El estado inicial es `reported`. Las novedades usan los tipos
+`mechanical_failure`, `unsafe_condition`, `damage` y `environmental`. La fecha
+de registro (`performed_at`) y el usuario se asignan automáticamente; la fecha
+y hora del evento de un incidente se envían manualmente en `occurred_at`.
+
+#### Evidencias de inspecciones, novedades e incidentes
+
+| Método | Endpoint | Content-Type |
+| --- | --- | --- |
+| `GET` | `/api/inspections/evidence/` | `application/json` |
+| `GET` | `/api/inspections/evidence/{id}/` | `application/json` |
+| `POST` | `/api/inspections/evidence/` | `multipart/form-data` |
+
+La carga recibe `record_type` (`inspection`, `news` o `incident`), `record_id`
+y `file`. Se aceptan JPG, JPEG, PNG y PDF; cada archivo debe pesar como máximo
+5 MB y cada registro puede tener hasta cinco archivos. El usuario autenticado
+queda como `uploaded_by` y la respuesta incluye la URL `url` para visualizarlo.
+Los errores de formato, tamaño, registro inexistente o límite de archivos
+responden `400` con el campo que debe corregirse.
+
+```bash
+curl -X POST "$BASE/api/inspections/evidence/" -H "$AUTH" \
+    -F 'record_type=inspection' -F 'record_id=42' \
+    -F 'file=@./evidencia.jpg'
+
+curl "$BASE/api/inspections/evidence/15/" -H "$AUTH"
+```
+
+#### Mantenimientos
+
+| Método | Endpoint | Body o parámetros |
+| --- | --- | --- |
+| `GET`, `POST` | `/api/maintenance/` | Lista o programa mantenimientos. Filtros: `equipment`, `maintenance_type`, `priority`, `scheduled_date`, `status`. |
+| `GET`, `PATCH`, `DELETE` | `/api/maintenance/{id}/` | Consulta, edita o elimina un mantenimiento. |
+| `PUT` | `/api/maintenance/{id}/assign/` | Asigna responsables con `{"responsible_ids":[2,3]}`. |
+| `POST` | `/api/maintenance/{id}/reschedule/` | Reprograma con `scheduled_date` y `reason`. |
+
+```bash
+curl -X POST "$BASE/api/maintenance/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"equipment":"CAM-01","maintenance_type":"preventivo","scheduled_date":"2026-12-01","priority":"media"}'
+
+curl -X PUT "$BASE/api/maintenance/4/assign/" -H "$AUTH" \
+    -H 'Content-Type: application/json' -d '{"responsible_ids":[2,3]}'
+
+curl -X POST "$BASE/api/maintenance/4/reschedule/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"scheduled_date":"2026-12-05","reason":"Disponibilidad de repuestos"}'
+```
+
+#### Esquema y administración
+
+| Método | Endpoint | Uso |
+| --- | --- | --- |
+| `GET` | `/api/schema/` | Descargar el esquema OpenAPI. |
+| `GET` | `/api/docs/` | Abrir Swagger UI. |
+| `GET` | `/admin/` | Consola administrativa de Django. |
+
+Los archivos cargados se sirven desde `/media/` únicamente cuando
+`DJANGO_DEBUG=True`. En producción se recomienda configurar el servidor web o
+el almacenamiento de objetos para servir `MEDIA_ROOT` de forma segura.
+
 Las modificaciones de equipos conservan usuario y fecha mediante el historial
 de `django-simple-history`.
 
@@ -409,9 +609,12 @@ accounts/      usuarios, roles y permisos, autenticación y contraseñas
 catalog/       tipos, equipos, categorías, ítems y listas versionadas
                (management/commands/cargar_datos_iniciales.py y fixtures/)
 inspections/   registros y respuestas de inspección
+operational_reports/
+               novedades, incidentes y evidencias
+common/        filtros y utilidades compartidas entre dominios
 ```
 
-No se han creado archivos de pruebas, conforme al alcance solicitado. Los
-módulos `maintenance`, `sst`, `documents`, `notifications` y `reports` fueron
-identificados en la arquitectura, pero no tienen historias ni modelos
-concretos en la especificación recibida y por eso no se implementan todavía.
+Las apps `new` e `incidents` se conservan temporalmente como fuente de datos
+para la migración hacia `operational_reports`; sus rutas públicas ya utilizan
+la nueva app. `maintenance`, `sst`, `documents`, `notifications` y `reports`
+siguen siendo dominios separados para futuras historias.

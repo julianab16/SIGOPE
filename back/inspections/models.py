@@ -1,4 +1,7 @@
 from django.conf import settings
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.core.validators import FileExtensionValidator
 from django.db import models
 from django.db.models import Q
 
@@ -55,3 +58,25 @@ class InspectionResponse(models.Model):
         constraints = [
             models.UniqueConstraint(fields=("inspection", "item"), name="unique_inspection_response")
         ]
+
+
+def evidence_upload_path(instance, filename):
+    return f"evidence/{instance.content_type.model}/{instance.object_id}/{filename}"
+
+
+class Evidence(models.Model):
+    MAX_SIZE = 5 * 1024 * 1024
+    ALLOWED_EXTENSIONS = ("jpg", "jpeg", "png", "pdf")
+
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.PositiveBigIntegerField()
+    target = GenericForeignKey("content_type", "object_id")
+    file = models.FileField(
+        upload_to=evidence_upload_path,
+        validators=[FileExtensionValidator(allowed_extensions=ALLOWED_EXTENSIONS)],
+    )
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("uploaded_at",)

@@ -42,6 +42,22 @@ class HasModulePermission(BasePermission):
         return level == AccessLevel.MANAGE
 
 
+class HasAnyReadModulePermission(HasModulePermission):
+    """Permite lectura por cualquiera de los módulos declarados en la vista."""
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not (user and user.is_authenticated):
+            return False
+        if request.method in SAFE_METHODS:
+            modules = getattr(view, "read_modules", (view.module,))
+            return any(
+                user.access_level(module) in (AccessLevel.VIEW, AccessLevel.MANAGE)
+                for module in modules
+            )
+        return user.access_level(view.module) == AccessLevel.MANAGE
+
+
 class HasSSTPermission(BasePermission):
     """Restringe las consultas HU-25 al módulo de seguimiento SST."""
 

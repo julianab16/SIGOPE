@@ -2,9 +2,16 @@ from django.db import transaction
 from rest_framework import serializers
 
 from django.utils import timezone
+from django.contrib.contenttypes.models import ContentType
 
 from catalog.models import Equipment, InspectionChecklist
-from .models import EquipmentCheckIn, Inspection, InspectionResponse
+from .models import EquipmentCheckIn, Evidence, Inspection, InspectionResponse
+
+
+def validate_license_for_equipment(user, equipment):
+    required = equipment.equipment_type.required_license
+    if required and required not in (user.licenses or []):
+        raise serializers.ValidationError({"equipment": f"El operario necesita licencia {required} para este equipo."})
 
 
 class CheckInSerializer(serializers.ModelSerializer):
@@ -31,6 +38,7 @@ class CheckInSerializer(serializers.ModelSerializer):
         equipment = attrs["equipment"]
         if equipment.status != Equipment.Status.USABLE:
             raise serializers.ValidationError({"equipment": "El equipo no está disponible."})
+        validate_license_for_equipment(self.context["request"].user, equipment)
         if EquipmentCheckIn.objects.filter(equipment=equipment, closed_at__isnull=True).exists():
             raise serializers.ValidationError({"equipment": "El equipo ya tiene un check-in abierto."})
         return attrs
@@ -111,6 +119,7 @@ class InspectionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"checklist": "La lista no está asociada al tipo de equipo seleccionado."}
             )
+        validate_license_for_equipment(self.context["request"].user, equipment)
         response_items = [response["item"].pk for response in attrs.get("responses", [])]
         checklist_items = set(checklist.items.values_list("pk", flat=True))
         if len(response_items) != len(set(response_items)) or set(response_items) != checklist_items:
@@ -146,3 +155,39 @@ class InspectionSerializer(serializers.ModelSerializer):
         instance.status = validated_data.get("status", instance.status)
         instance.save(update_fields=["status"])
         return instance
+
+
+class EvidenceSerializer(serializers.ModelSerializer):
+    record_type = serializers.ChoiceField(
+        choices=("inspection", "news", "incident"), write_only=True
+    )
+    record_id = serializers.IntegerField(write_only=True)
+    url = serializers.FileField(source="file", read_only=True)
+
+    class Meta:
+        model = Evidence
+        fields = ("id", "record_type", "record_id", "file", "url", "uploaded_by", "uploaded_at")
+        read_only_fields = ("id", "uploaded_by", "uploaded_at", "url")
+
+    def validate(self, attrs):
+        file = attrs.get("file")
+        if file and file.size > Evidence.MAX_SIZE:
+            raise serializers.ValidationError({"file": "El archivo no puede superar 5 MB."})
+        if file and file.name.lower().rsplit(".", 1)[-1] not in Evidence.ALLOWED_EXTENSIONS:
+            raise serializers.ValidationError({"file": "Solo se permiten archivos JPG, PNG o PDF."})
+        model_name = attrs["record_type"]
+        model = {"inspection": Inspection, "news": "new.News", "incident": "incidents.Incidents"}[model_name]
+        if isinstance(model, str):
+            from django.apps import apps
+            model = apps.get_model(model)
+        try:
+            target = model.objects.get(pk=attrs["record_id"])
+        except model.DoesNotExist:
+            raise serializers.ValidationError({"record_id": "El registro no existe."})
+        content_type = ContentType.objects.get_for_model(model)
+        if Evidence.objects.filter(content_type=content_type, object_id=target.pk).count() >= 5:
+            raise serializers.ValidationError({"file": "Un registro puede tener máximo 5 archivos."})
+        attrs["content_type"] = content_type
+        attrs["object_id"] = target.pk
+        attrs.pop("record_type")
+        return attrs

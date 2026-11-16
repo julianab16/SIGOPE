@@ -1,17 +1,17 @@
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import status, viewsets
-from rest_framework.permissions import SAFE_METHODS
+from rest_framework.permissions import BasePermission
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from accounts.models import AccessLevel, Module, User
-from accounts.permissions import HasModulePermission, HasSSTPermission
-from config.query_filters import filter_operational_records
+from accounts.permissions import HasAnyReadModulePermission, HasModulePermission
+from common.filters.operational import filter_operational_records
 
-from .models import EquipmentCheckIn, Inspection
-from .serializers import CheckInSerializer, InspectionSerializer
+from .models import EquipmentCheckIn, Evidence, Inspection
+from .serializers import CheckInSerializer, EvidenceSerializer, InspectionSerializer
 
 # Roles que supervisan y por eso ven las inspecciones de todos.
 SUPERVISOR_ROLES = (User.Role.ADMINISTRADOR, User.Role.JEFE_TALLER, User.Role.SST)
@@ -22,16 +22,12 @@ class InspectionViewSet(viewsets.ModelViewSet):
         "equipment", "checklist", "performed_by"
     ).prefetch_related("responses__item__category")
     serializer_class = InspectionSerializer
-    permission_classes = (HasModulePermission,)
+    permission_classes = (HasAnyReadModulePermission,)
     module = Module.INSPECTIONS
+    read_modules = (Module.INSPECTIONS, Module.SST)
     filterset_fields = ("equipment", "checklist", "status", "performed_by")
     ordering_fields = ("performed_at",)
     ordering = ("-performed_at",)
-
-    def get_permissions(self):
-        if self.request.method in SAFE_METHODS:
-            return [HasSSTPermission()]
-        return super().get_permissions()
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -85,3 +81,29 @@ class CheckInViewSet(viewsets.ModelViewSet):
         except IntegrityError as exc:
             raise ValidationError("No se pudo cerrar el check-in.") from exc
         return Response(self.get_serializer(checkin).data, status=status.HTTP_200_OK)
+
+
+class EvidenceViewSet(viewsets.ModelViewSet):
+    queryset = Evidence.objects.select_related("uploaded_by", "content_type")
+    serializer_class = EvidenceSerializer
+    http_method_names = ("get", "post", "head", "options")
+
+    def get_permissions(self):
+        class EvidencePermission(BasePermission):
+            def has_permission(permission_self, request, view):
+                user = request.user
+                if not (user and user.is_authenticated):
+                    return False
+                if request.method in SAFE_METHODS:
+                    return user.is_admin or any(
+                        user.access_level(module) in (AccessLevel.VIEW, AccessLevel.MANAGE)
+                        for module in (Module.INSPECTIONS, Module.INCIDENTS)
+                    )
+                record_type = request.data.get("record_type")
+                module = Module.INSPECTIONS if record_type == "inspection" else Module.INCIDENTS
+                return user.access_level(module) == AccessLevel.MANAGE
+
+        return [EvidencePermission()]
+
+    def perform_create(self, serializer):
+        serializer.save(uploaded_by=self.request.user)

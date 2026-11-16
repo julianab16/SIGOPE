@@ -67,6 +67,12 @@ RoleModel = Role
 
 
 class User(AbstractUser):
+    LICENSE_CHOICES = (
+        ("B1", "B1"),
+        ("C2", "C2"),
+        ("C1", "C1"),
+    )
+
     class Role(models.TextChoices):
         """Códigos de los roles base. Los roles adicionales viven en el modelo Role."""
 
@@ -89,6 +95,7 @@ class User(AbstractUser):
     must_change_password = models.BooleanField(
         "debe cambiar la contraseña", default=False, db_default=False
     )
+    licenses = models.JSONField("licencias de conducción", default=list, blank=True)
 
     objects = UserManager()
     REQUIRED_FIELDS = ["document", "full_name"]
@@ -115,10 +122,16 @@ class User(AbstractUser):
     def permissions_map(self):
         return {module: self.access_level(module) for module in Module.values}
 
+    def generated_username(self):
+        parts = self.full_name.strip().split()
+        if len(parts) < 2 or not self.document.strip():
+            return self.username.strip().lower()
+        return f"{parts[0][0]}{self.document.strip()}{parts[-1][0]}".lower()
+
     def save(self, *args, **kwargs):
-        self.username = self.username.strip().lower()
         self.full_name = self.full_name.strip()
         self.document = self.document.strip()
+        self.username = self.generated_username()
         self.__dict__.pop("_role_record", None)
         super().save(*args, **kwargs)
 

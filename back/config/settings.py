@@ -31,6 +31,8 @@ INSTALLED_APPS = [
     "accounts",
     "catalog",
     "inspections",
+    "new",
+    "incidents",
     "maintenance",
 ]
 

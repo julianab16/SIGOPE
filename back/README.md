@@ -311,6 +311,58 @@ Reglas:
   inspecciones anteriores conservan las preguntas que respondieron. El
   contenido de cada versión queda en `versions/`.
 
+### HU-25: consultas SST de inspecciones, novedades e incidentes
+
+Los seis endpoints de consulta requieren autenticación JWT y permiso `view` o
+`manage` en el módulo `sst`. El rol base SST ya incluye consulta de inspecciones
+y del módulo de novedades/incidentes; los administradores también tienen acceso.
+Los endpoints de escritura de inspecciones conservan su permiso habitual.
+
+| Entidad | Listado | Detalle | Filtros disponibles |
+| --- | --- | --- | --- |
+| Inspecciones | `GET /api/inspections/records/` | `GET /api/inspections/records/{id}/` | `fecha_desde`, `fecha_hasta`, `equipo`, `operario`, `estado`, `severidad=critica` |
+| Novedades | `GET /api/news/` | `GET /api/news/{id}/` | `fecha_desde`, `fecha_hasta`, `equipo`, `operario` |
+| Incidentes | `GET /api/incidents/` | `GET /api/incidents/{id}/` | `fecha_desde`, `fecha_hasta`, `equipo`, `operario` |
+
+Las fechas son inclusivas y usan `YYYY-MM-DD`; se pueden combinar todos los
+filtros de una entidad. `equipo` recibe el identificador del equipo y `operario`
+el ID del usuario. Un rango incorrecto, equipo/usuario inexistente, estado
+inválido o severidad no disponible responde `400`; detalle inexistente responde
+`404`, falta de autenticación `401` y falta de permiso SST `403`.
+
+Ejemplos: `/api/inspections/records/?equipo=CAR-1&fecha_desde=2026-01-01&estado=completed`
+y `/api/inspections/records/?severidad=critica`. Las respuestas de inspección
+incluyen lista/versión, equipo/tipo, operario, respuestas almacenadas, nombre,
+categoría, criticidad y observaciones por ítem, observación general y resultado.
+`es_critica` es verdadero cuando el resultado guardado es `critical_failure`,
+que el flujo existente asigna ante un ítem crítico respondido `does_not_comply`.
+
+Ejemplo de respuesta de inspección:
+
+```json
+{"id": 42, "equipment": "CAR-1", "equipment_type": "Cargador", "performed_by": 7,
+ "performed_by_name": "Ana Pérez", "performed_at": "2026-06-18T09:30:00-05:00",
+ "status": "completed", "global_result": "critical_failure", "es_critica": true,
+ "responses": [{"item": "ITM-01", "item_name": "Frenos", "item_is_critical": true,
+ "result": "does_not_comply", "notes": "Fuga detectada"}], "general_notes": "Equipo detenido"}
+```
+
+Ejemplo de detalle de novedad o incidente (campos disponibles actualmente):
+
+```json
+{"id": 12, "equipment": "CAR-1", "equipment_code": "CAR-1", "equipment_type": "Cargador",
+ "performed_by": 7, "reporter_id": 7, "reporter_name": "Ana Pérez",
+ "performed_at": "2026-06-18T09:30:00-05:00", "general_notes": "Descripción registrada"}
+```
+
+Novedades e incidentes devuelven los campos presentes en sus modelos iniciales:
+descripción (`general_notes`), equipo, reportante y fecha. Hoy no existen
+catálogos/campos de estado, severidad, categoría, adjuntos, afectaciones ni
+relaciones con inspecciones/entre novedades e incidentes. Por ello no se
+inventan; pedir `estado` o `severidad` para esos recursos devuelve `400`.
+Tampoco hay paginación configurada globalmente, así que se mantiene el contrato
+actual de listas.
+
 ### Registros de inspección
 
 Ruta base: `/api/inspections/records/`. Módulo `inspections`.

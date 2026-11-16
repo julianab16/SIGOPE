@@ -1,12 +1,14 @@
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import status, viewsets
+from rest_framework.permissions import SAFE_METHODS
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from accounts.models import AccessLevel, Module, User
-from accounts.permissions import HasModulePermission
+from accounts.permissions import HasModulePermission, HasSSTPermission
+from config.query_filters import filter_operational_records
 
 from .models import EquipmentCheckIn, Inspection
 from .serializers import CheckInSerializer, InspectionSerializer
@@ -18,13 +20,18 @@ SUPERVISOR_ROLES = (User.Role.ADMINISTRADOR, User.Role.JEFE_TALLER, User.Role.SS
 class InspectionViewSet(viewsets.ModelViewSet):
     queryset = Inspection.objects.select_related(
         "equipment", "checklist", "performed_by"
-    ).prefetch_related("responses__item")
+    ).prefetch_related("responses__item__category")
     serializer_class = InspectionSerializer
     permission_classes = (HasModulePermission,)
     module = Module.INSPECTIONS
     filterset_fields = ("equipment", "checklist", "status", "performed_by")
     ordering_fields = ("performed_at",)
     ordering = ("-performed_at",)
+
+    def get_permissions(self):
+        if self.request.method in SAFE_METHODS:
+            return [HasSSTPermission()]
+        return super().get_permissions()
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -34,7 +41,10 @@ class InspectionViewSet(viewsets.ModelViewSet):
             or user.role in SUPERVISOR_ROLES
             or user.access_level(Module.INSPECTIONS) == AccessLevel.VIEW
         )
-        return queryset if sees_all else queryset.filter(performed_by=user)
+        queryset = queryset if sees_all else queryset.filter(performed_by=user)
+        return filter_operational_records(
+            self.request, queryset, statuses=Inspection.Status.choices, critical_filter=True
+        )
 
 
 class CheckInViewSet(viewsets.ModelViewSet):

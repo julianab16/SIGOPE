@@ -42,10 +42,12 @@ class CheckInSerializer(serializers.ModelSerializer):
 
 class InspectionResponseSerializer(serializers.ModelSerializer):
     item_name = serializers.CharField(source="item.name", read_only=True)
+    item_is_critical = serializers.BooleanField(source="item.is_critical", read_only=True)
+    category_name = serializers.CharField(source="item.category.name", read_only=True)
 
     class Meta:
         model = InspectionResponse
-        fields = ("item", "item_name", "result", "notes")
+        fields = ("item", "item_name", "category_name", "item_is_critical", "result", "notes")
 
 
 class InspectionSerializer(serializers.ModelSerializer):
@@ -54,13 +56,20 @@ class InspectionSerializer(serializers.ModelSerializer):
     performed_by_name = serializers.CharField(source="performed_by.full_name", read_only=True)
     checklist_version = serializers.IntegerField(read_only=True)
     global_result = serializers.CharField(read_only=True)
+    equipment_code = serializers.CharField(source="equipment.identifier", read_only=True)
+    equipment_type = serializers.CharField(source="equipment.equipment_type.name", read_only=True)
+    checklist_name = serializers.CharField(source="checklist.name", read_only=True)
+    es_critica = serializers.SerializerMethodField()
 
     class Meta:
         model = Inspection
         fields = (
             "id",
             "equipment",
+            "equipment_code",
+            "equipment_type",
             "checklist",
+            "checklist_name",
             "checklist_version",
             "performed_by",
             "performed_by_name",
@@ -70,8 +79,12 @@ class InspectionSerializer(serializers.ModelSerializer):
             "checkin",
             "general_notes",
             "global_result",
+            "es_critica",
         )
         read_only_fields = ("id", "performed_at")
+
+    def get_es_critica(self, obj):
+        return obj.global_result == Inspection.GlobalResult.CRITICAL_FAILURE
 
     def validate(self, attrs):
         if self.instance:

@@ -8,6 +8,7 @@ from catalog.models import Equipment
 class Maintenance(models.Model):
     class MaintenanceType(models.TextChoices):
         PREVENTIVE = "preventivo", "Preventivo"
+        CORRECTIVE = "correctivo", "Correctivo"
 
     class Priority(models.TextChoices):
         HIGH = "alta", "Alta"

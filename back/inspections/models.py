@@ -1,12 +1,33 @@
 from django.conf import settings
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.core.validators import FileExtensionValidator
 from django.db import models
+from django.db.models import Q
 
 from catalog.models import Equipment, InspectionChecklist
+
+
+class EquipmentCheckIn(models.Model):
+    equipment = models.ForeignKey(Equipment, on_delete=models.PROTECT, related_name="checkins")
+    operator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="equipment_checkins")
+    hour_meter_start = models.DecimalField(max_digits=12, decimal_places=2)
+    hour_meter_end = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    checked_in_at = models.DateTimeField(auto_now_add=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=("equipment",), condition=Q(closed_at__isnull=True), name="unique_open_equipment_checkin")]
+        ordering = ("-checked_in_at",)
 
 
 class Inspection(models.Model):
     class Status(models.TextChoices):
         IN_PROGRESS = "in_progress", "En progreso"
+        COMPLETED = "completed", "Completada"
+
+    class GlobalResult(models.TextChoices):
+        CRITICAL_FAILURE = "critical_failure", "Con falla crítica"
         COMPLETED = "completed", "Completada"
 
     equipment = models.ForeignKey(Equipment, on_delete=models.PROTECT, related_name="inspections")
@@ -15,8 +36,11 @@ class Inspection(models.Model):
     )
     checklist_version = models.PositiveIntegerField()
     performed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    checkin = models.OneToOneField(EquipmentCheckIn, on_delete=models.PROTECT, related_name="inspection", null=True, blank=True)
     performed_at = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.IN_PROGRESS)
+    general_notes = models.TextField(blank=True)
+    global_result = models.CharField(max_length=30, choices=GlobalResult.choices, blank=True)
 
 
 class InspectionResponse(models.Model):
@@ -34,3 +58,25 @@ class InspectionResponse(models.Model):
         constraints = [
             models.UniqueConstraint(fields=("inspection", "item"), name="unique_inspection_response")
         ]
+
+
+def evidence_upload_path(instance, filename):
+    return f"evidence/{instance.content_type.model}/{instance.object_id}/{filename}"
+
+
+class Evidence(models.Model):
+    MAX_SIZE = 5 * 1024 * 1024
+    ALLOWED_EXTENSIONS = ("jpg", "jpeg", "png", "pdf")
+
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.PositiveBigIntegerField()
+    target = GenericForeignKey("content_type", "object_id")
+    file = models.FileField(
+        upload_to=evidence_upload_path,
+        validators=[FileExtensionValidator(allowed_extensions=ALLOWED_EXTENSIONS)],
+    )
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("uploaded_at",)

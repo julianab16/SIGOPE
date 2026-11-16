@@ -1,6 +1,6 @@
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
-from .models import AccessLevel
+from .models import AccessLevel, Module
 
 
 class IsAdministrator(BasePermission):
@@ -40,3 +40,32 @@ class HasModulePermission(BasePermission):
         if request.method in SAFE_METHODS:
             return level in (AccessLevel.VIEW, AccessLevel.MANAGE)
         return level == AccessLevel.MANAGE
+
+
+class HasAnyReadModulePermission(HasModulePermission):
+    """Permite lectura por cualquiera de los módulos declarados en la vista."""
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not (user and user.is_authenticated):
+            return False
+        if request.method in SAFE_METHODS:
+            modules = getattr(view, "read_modules", (view.module,))
+            return any(
+                user.access_level(module) in (AccessLevel.VIEW, AccessLevel.MANAGE)
+                for module in modules
+            )
+        return user.access_level(view.module) == AccessLevel.MANAGE
+
+
+class HasSSTPermission(BasePermission):
+    """Restringe las consultas HU-25 al módulo de seguimiento SST."""
+
+    message = "Se requiere permiso de consulta del módulo SST."
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(
+            user and user.is_authenticated
+            and (user.is_admin or user.access_level(Module.SST) in (AccessLevel.VIEW, AccessLevel.MANAGE))
+        )

@@ -1,5 +1,6 @@
 import uuid
 from datetime import date
+from unicodedata import normalize
 
 from django.db import transaction
 from django.utils.text import slugify
@@ -21,7 +22,7 @@ class EquipmentTypeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = EquipmentType
-        fields = ("id", "name", "description", "is_active", "equipment_count")
+        fields = ("id", "name", "description", "is_active", "required_license", "equipment_count")
         read_only_fields = ("id",)
 
     def get_equipment_count(self, obj) -> int:
@@ -41,6 +42,14 @@ class EquipmentTypeSerializer(serializers.ModelSerializer):
 
 
 class EquipmentSerializer(serializers.ModelSerializer):
+    identifier = serializers.CharField(read_only=True)
+    number = serializers.IntegerField(
+        write_only=True,
+        required=False,
+        min_value=1,
+        max_value=999,
+        help_text="Número elegido por el usuario, entre 1 y 999.",
+    )
     equipment_type_name = serializers.CharField(source="equipment_type.name", read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     last_modified_by = serializers.SerializerMethodField()
@@ -50,6 +59,7 @@ class EquipmentSerializer(serializers.ModelSerializer):
         model = Equipment
         fields = (
             "identifier",
+            "number",
             "plate",
             "equipment_type",
             "equipment_type_name",
@@ -62,9 +72,6 @@ class EquipmentSerializer(serializers.ModelSerializer):
             "last_modified_by",
             "last_modified_at",
         )
-        # La unicidad del código se valida en validate_identifier (sin distinguir mayúsculas).
-        extra_kwargs = {"identifier": {"validators": []}}
-
     def _last_history(self, obj):
         if not hasattr(obj, "_last_history"):
             obj._last_history = (
@@ -87,17 +94,14 @@ class EquipmentSerializer(serializers.ModelSerializer):
             value = record.history_date if record else None
         return serializers.DateTimeField().to_representation(value) if value else None
 
-    def validate_identifier(self, value):
-        value = value.strip().upper()
-        if not value:
-            raise serializers.ValidationError("Escribe el código o la placa.")
-        if self.instance:
-            if value != self.instance.identifier:
-                raise serializers.ValidationError("El código de un equipo no se puede cambiar.")
-            return value
-        if Equipment.objects.filter(identifier__iexact=value).exists():
-            raise serializers.ValidationError("Ya existe un equipo con este código o placa.")
-        return value
+    def _type_prefix(self, equipment_type):
+        plain_name = normalize("NFKD", equipment_type.name).encode("ascii", "ignore").decode()
+        prefix = "".join(character for character in plain_name.upper() if character.isalpha())[:3]
+        if len(prefix) != 3:
+            raise serializers.ValidationError(
+                {"equipment_type": "El tipo de equipo debe tener al menos tres letras."}
+            )
+        return prefix
 
     def validate_plate(self, value):
         value = value.strip().upper()
@@ -130,9 +134,36 @@ class EquipmentSerializer(serializers.ModelSerializer):
 
     def validate_equipment_type(self, value):
         changing = not self.instance or self.instance.equipment_type_id != value.pk
+        if self.instance and changing:
+            raise serializers.ValidationError(
+                "El tipo de equipo no se puede cambiar porque define el identifier."
+            )
         if changing and not value.is_active:
             raise serializers.ValidationError("El tipo de equipo está inactivo.")
         return value
+
+    def validate(self, attrs):
+        if self.instance:
+            if "number" in attrs:
+                raise serializers.ValidationError(
+                    {"number": "El número no se puede cambiar después de crear el equipo."}
+                )
+            return attrs
+
+        number = attrs.get("number")
+        if number is None:
+            raise serializers.ValidationError(
+                {"number": "Elige un número entre 1 y 999 para generar el identifier."}
+            )
+        prefix = self._type_prefix(attrs["equipment_type"])
+        identifier = f"{prefix}-{number:03d}"
+        if Equipment.objects.filter(identifier=identifier).exists():
+            raise serializers.ValidationError(
+                {"number": f"El identifier {identifier} ya existe. Elige otro número."}
+            )
+        attrs["identifier"] = identifier
+        attrs.pop("number")
+        return attrs
 
 
 class ItemCategorySerializer(serializers.ModelSerializer):
@@ -143,9 +174,24 @@ class ItemCategorySerializer(serializers.ModelSerializer):
 
 
 class ChecklistItemSerializer(serializers.ModelSerializer):
+    identifier = serializers.CharField(read_only=True)
+
     class Meta:
         model = ChecklistItem
         fields = ("identifier", "name", "category", "is_critical", "is_active")
+
+    def _new_identifier(self, category):
+        plain_name = normalize("NFKD", category.name).encode("ascii", "ignore").decode()
+        prefix = "".join(character for character in plain_name.upper() if character.isalpha())[:3]
+        prefix = prefix or "GEN"
+        while True:
+            identifier = f"ITM-{prefix}-{uuid.uuid4().hex[:6].upper()}"
+            if not ChecklistItem.objects.filter(identifier=identifier).exists():
+                return identifier
+
+    def create(self, validated_data):
+        validated_data["identifier"] = self._new_identifier(validated_data["category"])
+        return ChecklistItem.objects.create(**validated_data)
 
 
 class ChecklistItemOrderSerializer(serializers.ModelSerializer):
@@ -286,7 +332,7 @@ class InspectionChecklistSerializer(serializers.ModelSerializer):
                 item = candidates.filter(pk__in=current).first() or candidates.first()
                 if not item:
                     item = ChecklistItem.objects.create(
-                        identifier=f"ITM-{uuid.uuid4().hex[:10].upper()}",
+                        identifier=self._new_item_identifier(category),
                         name=entry["text"],
                         category=category,
                         is_critical=entry["is_critical"],
@@ -295,6 +341,15 @@ class InspectionChecklistSerializer(serializers.ModelSerializer):
                 orders.append(ChecklistItemOrder(checklist=checklist, item=item, position=position))
                 position += 1
         self._replace_orders(checklist, orders)
+
+    def _new_item_identifier(self, category):
+        plain_name = normalize("NFKD", category.name).encode("ascii", "ignore").decode()
+        prefix = "".join(character for character in plain_name.upper() if character.isalpha())[:3]
+        prefix = prefix or "GEN"
+        while True:
+            identifier = f"ITM-{prefix}-{uuid.uuid4().hex[:6].upper()}"
+            if not ChecklistItem.objects.filter(identifier=identifier).exists():
+                return identifier
 
     def _replace_orders(self, checklist, orders):
         checklist.checklistitemorder_set.all().delete()

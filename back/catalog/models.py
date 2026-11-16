@@ -4,6 +4,11 @@ from simple_history.models import HistoricalRecords
 
 
 class EquipmentType(models.Model):
+    class RequiredLicense(models.TextChoices):
+        B1 = "B1", "B1"
+        C2 = "C2", "C2"
+        C1 = "C1", "C1"
+
     name = models.CharField(
         "nombre del tipo",
         max_length=100,
@@ -12,6 +17,10 @@ class EquipmentType(models.Model):
     )
     description = models.TextField("descripción", blank=True, default="", db_default="")
     is_active = models.BooleanField(default=True)
+    required_license = models.CharField(
+        "licencia requerida", max_length=2, choices=RequiredLicense.choices,
+        blank=True, default=""
+    )
     history = HistoricalRecords()
 
     class Meta:

@@ -40,6 +40,7 @@ class SessionUserSerializer(serializers.ModelSerializer):
             "is_admin",
             "must_change_password",
             "permissions",
+            "licenses",
         )
 
     def get_permissions(self, obj) -> dict[str, str]:
@@ -105,10 +106,16 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(read_only=True)
     password = serializers.CharField(
         write_only=True, required=False, min_length=8, trim_whitespace=False
     )
     role_name = serializers.CharField(read_only=True)
+    licenses = serializers.ListField(
+        child=serializers.ChoiceField(choices=["B1", "C2", "C1"]),
+        required=False,
+        allow_empty=True,
+    )
 
     class Meta:
         model = User
@@ -122,6 +129,7 @@ class UserSerializer(serializers.ModelSerializer):
             "is_active",
             "must_change_password",
             "password",
+            "licenses",
         )
         read_only_fields = ("id", "must_change_password")
 
@@ -142,8 +150,8 @@ class UserSerializer(serializers.ModelSerializer):
 
     def validate_full_name(self, value):
         value = value.strip()
-        if not value:
-            raise serializers.ValidationError("Escribe el nombre completo.")
+        if len(value.split()) < 2:
+            raise serializers.ValidationError("Escribe nombre y apellido para generar el usuario.")
         return value
 
     def validate_role(self, value):
@@ -164,9 +172,20 @@ class UserSerializer(serializers.ModelSerializer):
             )
         return attrs
 
+    def _generated_username(self, full_name, document):
+        names = full_name.strip().split()
+        if len(names) < 2:
+            raise serializers.ValidationError(
+                {"full_name": "Escribe nombre y apellido para generar el usuario."}
+            )
+        return f"{names[0][0]}{document.strip()}{names[-1][0]}".lower()
+
     def create(self, validated_data):
         password = validated_data.pop("password", None)
         temporary = password or generate_temporary_password()
+        validated_data["username"] = self._generated_username(
+            validated_data["full_name"], validated_data["document"]
+        )
         user = User(**validated_data, must_change_password=True)
         user.set_password(temporary)
         user.save()
@@ -179,6 +198,7 @@ class UserSerializer(serializers.ModelSerializer):
         password = validated_data.pop("password", None)
         for key, value in validated_data.items():
             setattr(instance, key, value)
+        instance.username = self._generated_username(instance.full_name, instance.document)
         if password:
             instance.set_password(password)
             instance.must_change_password = True

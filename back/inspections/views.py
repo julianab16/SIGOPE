@@ -1,5 +1,6 @@
 from django.db import IntegrityError, transaction
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
 from rest_framework.permissions import BasePermission
 from rest_framework.decorators import action
@@ -11,7 +12,7 @@ from accounts.permissions import HasAnyReadModulePermission, HasModulePermission
 from common.filters.operational import filter_operational_records
 
 from .models import EquipmentCheckIn, Evidence, Inspection
-from .serializers import CheckInSerializer, EvidenceSerializer, InspectionSerializer
+from .serializers import CheckInCloseSerializer, CheckInSerializer, EvidenceSerializer, InspectionSerializer
 
 # Roles que supervisan y por eso ven las inspecciones de todos.
 SUPERVISOR_ROLES = (User.Role.ADMINISTRADOR, User.Role.JEFE_TALLER, User.Role.SST)
@@ -67,6 +68,7 @@ class CheckInViewSet(viewsets.ModelViewSet):
             raise ValidationError({"equipment": "El equipo ya tiene un check-in abierto."})
         serializer.save(equipment=equipment)
 
+    @extend_schema(request=CheckInCloseSerializer, responses=CheckInSerializer)
     @action(detail=True, methods=("post",))
     @transaction.atomic
     def close(self, request, pk=None):
@@ -75,9 +77,12 @@ class CheckInViewSet(viewsets.ModelViewSet):
             raise ValidationError("Solo el operario que inició el uso puede cerrarlo.")
         if checkin.closed_at:
             raise ValidationError("El check-in ya está cerrado.")
+        cierre = CheckInCloseSerializer(data=request.data, context={"checkin": checkin})
+        cierre.is_valid(raise_exception=True)
         try:
+            checkin.hour_meter_end = cierre.validated_data["hour_meter_end"]
             checkin.closed_at = timezone.now()
-            checkin.save(update_fields=("closed_at",))
+            checkin.save(update_fields=("hour_meter_end", "closed_at"))
         except IntegrityError as exc:
             raise ValidationError("No se pudo cerrar el check-in.") from exc
         return Response(self.get_serializer(checkin).data, status=status.HTTP_200_OK)

@@ -48,6 +48,18 @@ class CheckInSerializer(serializers.ModelSerializer):
         return EquipmentCheckIn.objects.create(**validated_data)
 
 
+class CheckInCloseSerializer(serializers.Serializer):
+    hour_meter_end = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0)
+
+    def validate(self, attrs):
+        checkin = self.context["checkin"]
+        if attrs["hour_meter_end"] < checkin.hour_meter_start:
+            raise serializers.ValidationError(
+                {"hour_meter_end": "La lectura final debe ser igual o mayor a la inicial."}
+            )
+        return attrs
+
+
 class InspectionResponseSerializer(serializers.ModelSerializer):
     item_name = serializers.CharField(source="item.name", read_only=True)
     item_is_critical = serializers.BooleanField(source="item.is_critical", read_only=True)

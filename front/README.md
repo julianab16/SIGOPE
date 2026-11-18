@@ -1,11 +1,13 @@
-# SIGOPE · Front (Administración)
+# SIGOPE · Front (Administración y operación)
 
-Vistas del administrador de SIGOPE hechas en **React + TypeScript + Vite + Tailwind CSS**:
+Vistas de administración y operación de SIGOPE hechas en **React + TypeScript + Vite + Tailwind CSS**:
 
 - Inicio de sesión (con aviso de sesión vencida por inactividad)
 - Usuarios y roles (usuarios, roles y permisos por módulo)
 - Equipos y tipos de equipo
 - Listas de inspección (una lista por tipo de equipo)
+- Operación del operario (equipos disponibles, check-in e inspección)
+- Registro de novedades e incidentes con evidencias
 - Acceso denegado (cuando el rol no tiene permiso)
 
 Todas las vistas son responsive (celular, tablet y computador).
@@ -22,8 +24,8 @@ npm run dev
 
 Se abre en `http://localhost:5173`.
 
-- Con `VITE_API_URL=http://localhost:8000` (valor de `.env.example`) usa el **backend real** (ver `../back/README.md`). Se entra con el superusuario creado con `createsuperuser` (usuario o cédula).
-- Con `VITE_API_URL` **vacía** funciona con **datos de prueba** en memoria (los tipos, equipos y listas del Excel del cliente). Para entrar: usuario `pgomez`, contraseña `Sigope2025`. Los cambios se pierden al recargar la página.
+- Con `VITE_API_URL=http://localhost:8000` (valor de `.env.example`) usa el **backend real** (ver `../back/README.md`). Para administrar, entra con el superusuario creado con `createsuperuser` (usuario o cédula); para operar, usa un usuario activo con los permisos del módulo correspondientes.
+- Con `VITE_API_URL` **vacía** funciona con **datos de prueba** en memoria (los tipos, equipos y listas del Excel del cliente). Para entrar como administrador usa `pgomez`; para probar el flujo de operario usa `crodriguez`. Ambos usan la contraseña `Sigope2025`. Los cambios se pierden al recargar la página.
 
 ## Estructura
 
@@ -31,13 +33,17 @@ Se abre en `http://localhost:5173`.
 src/
 ├── App.tsx                 Login, control de sesión, menú y navegación
 ├── types.ts                Modelos de datos (Usuario, Rol, Equipo, ListaInspeccion…)
-├── components/ui.tsx       Componentes y estilos compartidos
+├── components/
+│   ├── ui.tsx              Componentes y estilos compartidos
+│   └── CargaEvidencias.tsx Carga y visualización de adjuntos operativos
 ├── pages/                  Una vista por archivo
 │   ├── Login.tsx
 │   ├── CambiarClave.tsx    Cambio obligatorio de la contraseña temporal
 │   ├── UsuariosRoles.tsx
 │   ├── EquiposTipos.tsx
 │   ├── ListasInspeccion.tsx
+│   ├── OperacionOperario.tsx
+│   ├── ReportesOperario.tsx
 │   └── AccesoDenegado.tsx
 └── services/
     ├── api.ts              ← Única puerta al backend (endpoints y traducción de campos)
@@ -79,8 +85,22 @@ Todas las rutas van bajo `{VITE_API_URL}/api`. Las peticiones envían `Authoriza
 | Editar equipo | `PATCH /catalog/equipments/{codigo}/` |
 | Listar / crear listas | `GET`, `POST /catalog/checklists/` |
 | Actualizar lista (nueva versión) | `PATCH /catalog/checklists/{id}/` |
+| Consultar equipos disponibles | `GET /catalog/equipments/?status=usable` |
+| Iniciar / consultar check-ins | `POST`, `GET /inspections/checkins/` |
+| Cerrar check-in con horómetro final | `POST /inspections/checkins/{id}/close/` |
+| Consultar lista vigente y registrar inspección | `GET /catalog/checklists/`, `POST /inspections/records/` |
+| Registrar novedad / incidente | `POST /news/`, `POST /incidents/` |
+| Adjuntar evidencia | `POST /inspections/evidence/` (`multipart/form-data`) |
 
 El detalle de cada endpoint está en `../back/README.md` y en Swagger (`http://localhost:8000/api/docs/`).
+
+### Flujos de operación del operario
+
+- Consulta equipos disponibles por código, placa o modelo, y filtra por tipo. Un equipo con check-in abierto no puede seleccionarse de nuevo.
+- Inicia el check-in con la lectura inicial del horómetro; la fecha y hora de inicio provienen del backend. Completa la lista vigente del tipo de equipo y cierra el uso con una lectura final igual o mayor a la inicial.
+- Cada ítem de inspección requiere una respuesta: **Cumple**, **No cumple** o **No aplica**. Se pueden añadir observaciones por ítem y una observación general; el resultado crítico se muestra según la respuesta del backend.
+- Registra novedades con los tipos definidos por la API e incidentes con fecha/hora del evento y severidad. La etiqueta **Moderado** se envía como `media`.
+- Después de crear una inspección, novedad o incidente, puede adjuntar hasta cinco evidencias JPG/JPEG, PNG o PDF, de máximo 5 MB por archivo. Las imágenes grandes se comprimen en el navegador; los PDF que superen el límite se rechazan. La respuesta permite abrir la evidencia subida.
 
 ### Reglas que valida el backend
 
@@ -100,5 +120,5 @@ El front también las valida, pero la fuente de verdad es el backend:
 
 ## Pendiente fuera de este front
 
-- La app del operario (check-in, checklist, novedades) y los paneles de SST y Taller.
-- El backend ya aplica los permisos por módulo de cada rol (el login los devuelve en `user.permissions`). Por ahora este front solo deja entrar al **Administrador**; los demás roles ven "Acceso denegado" hasta que existan sus pantallas.
+- Los paneles de SST y Taller, y los reportes y tableros.
+- El backend aplica los permisos por módulo y el login los devuelve en `user.permissions`; la navegación operativa del operario usa esos permisos.

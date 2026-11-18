@@ -495,7 +495,7 @@ curl -X POST "$BASE/api/catalog/checklists/" -H "$AUTH" \
 | --- | --- | --- |
 | `GET`, `POST` | `/api/inspections/checkins/` | Consulta o inicia el uso de un equipo. |
 | `GET` | `/api/inspections/checkins/{id}/` | Consulta un check-in. |
-| `POST` | `/api/inspections/checkins/{id}/close/` | Cierra el check-in del operario autenticado. |
+| `POST` | `/api/inspections/checkins/{id}/close/` | Cierra el check-in del operario autenticado. Body: `{"hour_meter_end": 125.5}`. |
 | `GET`, `POST` | `/api/inspections/records/` | Lista o registra inspecciones. |
 | `GET`, `PATCH`, `DELETE` | `/api/inspections/records/{id}/` | Consulta, cambia el estado o elimina una inspección según permisos. |
 
@@ -508,12 +508,18 @@ curl -X POST "$BASE/api/inspections/records/" -H "$AUTH" \
     -H 'Content-Type: application/json' \
     -d '{"equipment":"CAM-01","checklist":"CHK-CAMIONETAS","responses":[{"item":"ITEM-01","result":"complies","notes":"Sin novedades"}]}'
 
-curl -X POST "$BASE/api/inspections/checkins/10/close/" -H "$AUTH"
+curl -X POST "$BASE/api/inspections/checkins/10/close/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"hour_meter_end":125.5}'
 ```
 
 El operario autenticado se guarda como `performed_by`. Si el tipo de equipo
 requiere una licencia, el usuario debe tenerla en `licenses`; de lo contrario
 el check-in y la inspección responden `400` con un mensaje explicativo.
+La fecha y hora del check-in las asigna el servidor. La lectura final del
+horómetro debe ser igual o mayor que la inicial. Las respuestas de inspección
+usan `complies`, `does_not_comply` o `not_applicable`; se exige una respuesta
+por cada ítem de la lista vigente.
 
 #### Novedades e incidentes
 
@@ -540,6 +546,10 @@ El estado inicial es `reported`. Las novedades usan los tipos
 `mechanical_failure`, `unsafe_condition`, `damage` y `environmental`. La fecha
 de registro (`performed_at`) y el usuario se asignan automáticamente; la fecha
 y hora del evento de un incidente se envían manualmente en `occurred_at`.
+Las severidades aceptadas son `leve`, `media` y `grave` (`media` se
+presenta como “Moderado” en la interfaz).
+El operario que reportó un incidente no puede editarlo después de enviarlo;
+los demás cambios siguen sujetos a los permisos del módulo.
 
 #### Evidencias de inspecciones, novedades e incidentes
 

@@ -1,14 +1,14 @@
 # SIGOPE
 
 Sistema para gestionar usuarios, equipos, tipos de equipo, listas de
-inspección e inspecciones.
+inspección, operación de equipos e informes operativos.
 
 El repositorio tiene dos partes independientes:
 
 ```text
 SIGOPE/
 ├── back/    API REST en Django + Django REST Framework (PostgreSQL, JWT)
-├── front/   Vistas de administración en React + TypeScript + Vite + Tailwind
+├── front/   Vistas de administración y operación en React + TypeScript + Vite + Tailwind
 └── docs/    Arquitectura y modelo de base de datos
 ```
 
@@ -55,12 +55,6 @@ coverage run --source=accounts,catalog,inspections,config manage.py test
 coverage report --show-missing
 ```
 
-Las pruebas del backend cubren autenticación, usuarios y roles, permisos de
-catálogos, versiones de listas, carga de datos iniciales e inspecciones. La
-ejecución local validada encontró 40 pruebas y 93% de cobertura del backend;
-CI requiere un mínimo de 90%. El porcentaje puede variar al agregar o modificar
-código. Las pruebas crean sus propios datos temporales, incluido un usuario
-con rol Administrador, y no crean usuarios en tu base local.
 
 ### Frontend
 
@@ -73,7 +67,9 @@ cp .env.example .env             # Ya trae VITE_API_URL=http://localhost:8000
 npm run dev
 ```
 
-Se abre en `http://localhost:5173` y se entra con el superusuario (usuario o
-cédula). El backend permite peticiones desde ese origen (CORS) por defecto.
+Se abre en `http://localhost:5173`. Para administrar, inicia sesión con el
+superusuario (usuario o cédula); para operar, usa un usuario activo con los
+permisos correspondientes. El backend permite peticiones desde ese origen
+(CORS) por defecto.
 Si `VITE_API_URL` se deja vacía, el front funciona con datos de prueba (ver
 [front/README.md](front/README.md)).

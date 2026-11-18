@@ -6,7 +6,27 @@
 //   El backend usa nombres en inglés (full_name, identifier…); aquí se traducen
 //   a los nombres del front (nombre, codigo…) en ambos sentidos, incluidos los errores.
 
-import { MODULOS, type Equipo, type EstadoEquipo, type ListaInspeccion, type Modulo, type Nivel, type Rol, type Sesion, type TipoEquipo, type Usuario, type UsuarioCreado } from "../types";
+import {
+  MODULOS,
+  type CheckIn,
+  type Equipo,
+  type EstadoEquipo,
+  type EvidenciaAdjunta,
+  type ListaInspeccion,
+  type ListaOperativa,
+  type Modulo,
+  type Nivel,
+  type ResultadoInspeccion,
+  type RegistroOperativo,
+  type Rol,
+  type Sesion,
+  type SeveridadIncidente,
+  type TipoEquipo,
+  type TipoNovedad,
+  type TipoRegistroOperativo,
+  type Usuario,
+  type UsuarioCreado,
+} from "../types";
 import { ApiError } from "./ApiError";
 import { mockApi } from "./mockApi";
 
@@ -46,6 +66,24 @@ export type Api = {
     crear(tipo: string): Promise<ListaInspeccion>;
     actualizar(id: string, datos: Pick<ListaInspeccion, "secciones">): Promise<ListaInspeccion>;
   };
+  operacion: {
+    equiposDisponibles(): Promise<Equipo[]>;
+    checkins(): Promise<CheckIn[]>;
+    iniciarCheckin(codigo: string, horometroInicial: number): Promise<CheckIn>;
+    cerrarCheckin(id: number, horometroFinal: number): Promise<CheckIn>;
+    listaParaEquipo(codigo: string): Promise<ListaOperativa>;
+    inspeccionParaCheckin(checkin: CheckIn): Promise<ResultadoInspeccion | null>;
+    registrarInspeccion(datos: {
+      equipo: string;
+      lista: string;
+      checkin: number;
+      respuestas: { item: string; resultado: "complies" | "does_not_comply" | "not_applicable"; observacion: string }[];
+      observacionGeneral: string;
+    }): Promise<ResultadoInspeccion>;
+    registrarNovedad(datos: { equipo: string; tipo: TipoNovedad; descripcion: string; observacion: string }): Promise<RegistroOperativo>;
+    registrarIncidente(datos: { equipo: string; ocurridoEn: string; descripcion: string; severidad: SeveridadIncidente }): Promise<RegistroOperativo>;
+    subirEvidencia(tipo: TipoRegistroOperativo, idRegistro: number, archivo: File): Promise<EvidenciaAdjunta>;
+  };
 };
 
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "");
@@ -57,11 +95,15 @@ export const usaDatosDePrueba = !API_URL;
 
 type NivelApi = "none" | "view" | "manage";
 type UsuarioApi = { id: number; username: string; full_name: string; document: string; role: string; role_name: string; is_active: boolean; temporary_password?: string };
-type SesionApi = { access: string; refresh: string; user: { username: string; full_name: string; role_name: string; is_admin: boolean; must_change_password: boolean } };
+type SesionApi = { access: string; refresh: string; user: { username: string; full_name: string; role_name: string; is_admin: boolean; must_change_password: boolean; permissions: Record<string, NivelApi> } };
 type RolApi = { id: number; code: string; name: string; is_base: boolean; permissions: Record<string, NivelApi> };
 type TipoApi = { id: number; name: string; description: string; is_active: boolean };
 type EquipoApi = { identifier: string; plate: string; equipment_type: number; equipment_type_name: string; status: string; model: string; serial_number: string; year: number | null; hour_meter: string; last_modified_by: string | null; last_modified_at: string | null };
-type ListaApi = { identifier: string; name: string; version: number; equipment_types_detail: { id: number; name: string }[]; sections: { title: string; items: { text: string; is_critical: boolean }[] }[] };
+type ListaApi = { identifier: string; name: string; version: number; equipment_types_detail: { id: number; name: string }[]; sections: { title: string; items: { identifier: string; text: string; is_critical: boolean }[] }[] };
+type CheckInApi = { id: number; equipment: string; equipment_code: string; hour_meter_start: string; hour_meter_end: string; checked_in_at: string; closed_at: string | null; checklist_id: string | null };
+type InspeccionApi = { id: number; checkin: number | null; global_result: string; es_critica: boolean };
+type RegistroApi = { id: number; estado: string; performed_at: string };
+type EvidenciaApi = { id: number; record_type: TipoRegistroOperativo; record_id: number; url: string; file: string };
 
 const MODULO_API: Record<Modulo, string> = {
   Inspecciones: "inspections",
@@ -120,6 +162,31 @@ const aLista = (l: ListaApi): ListaInspeccion => ({
   version: l.version,
   secciones: l.sections.map((s) => ({ titulo: s.title, items: s.items.map((i) => ({ texto: i.text, critico: i.is_critical })) })),
 });
+const aCheckIn = (c: CheckInApi): CheckIn => ({
+  id: c.id,
+  equipo: c.equipment,
+  codigoEquipo: c.equipment_code,
+  horometroInicial: String(c.hour_meter_start),
+  horometroFinal: String(c.hour_meter_end),
+  iniciadoEn: c.checked_in_at,
+  finalizadoEn: c.closed_at,
+  listaId: c.checklist_id,
+});
+const aRegistro = (r: RegistroApi): RegistroOperativo => ({ id: r.id, estado: r.estado, creadoEn: r.performed_at });
+const aEvidencia = (e: EvidenciaApi): EvidenciaAdjunta => ({
+  id: e.id,
+  tipoRegistro: e.record_type,
+  idRegistro: e.record_id,
+  url: e.url,
+  nombre: e.file.split("/").pop() ?? "Evidencia",
+});
+
+function permisosSesion(permisos: Record<string, NivelApi>): Record<Modulo, Nivel> {
+  return Object.fromEntries(MODULOS.map((m) => [
+    m,
+    NIVEL_FRONT[permisos[MODULO_API[m]] as NivelApi] ?? "Sin acceso",
+  ])) as Record<Modulo, Nivel>;
+}
 
 // ---------------------------------------------------------------------------
 // HTTP con token JWT (y renovación automática del access token)
@@ -169,10 +236,11 @@ async function renovarToken(): Promise<boolean> {
 async function http<T>(metodo: string, ruta: string, cuerpo?: unknown, campos: Campos = {}, reintento = true): Promise<T> {
   let r: Response;
   try {
+    const esFormulario = cuerpo instanceof FormData;
     r = await fetch(`${API_URL}/api${ruta}`, {
       method: metodo,
-      headers: { "Content-Type": "application/json", ...(access ? { Authorization: `Bearer ${access}` } : {}) },
-      body: cuerpo === undefined ? undefined : JSON.stringify(cuerpo),
+      headers: { ...(esFormulario ? {} : { "Content-Type": "application/json" }), ...(access ? { Authorization: `Bearer ${access}` } : {}) },
+      body: cuerpo === undefined ? undefined : esFormulario ? cuerpo : JSON.stringify(cuerpo),
     });
   } catch {
     throw new ApiError(0, { detail: ["No se pudo conectar con el servidor. Revisa tu conexión."] });
@@ -224,7 +292,7 @@ const httpApi: Api = {
       access = s.access;
       refresh = s.refresh;
       const u = s.user;
-      return { token: s.access, nombre: u.full_name || u.username, usuario: u.username, rol: u.role_name, esAdmin: u.is_admin, debeCambiarClave: u.must_change_password };
+      return { token: s.access, nombre: u.full_name || u.username, usuario: u.username, rol: u.role_name, esAdmin: u.is_admin, debeCambiarClave: u.must_change_password, permisos: permisosSesion(u.permissions) };
     },
     async logout() {
       if (access) await http("POST", "/accounts/logout/", { refresh }).catch(() => undefined);
@@ -274,6 +342,93 @@ const httpApi: Api = {
     actualizar: async (id, { secciones }) => {
       const sections = secciones.map((s) => ({ title: s.titulo, items: s.items.map((i) => ({ text: i.texto, is_critical: !!i.critico })) }));
       return aLista(await http<ListaApi>("PATCH", `/catalog/checklists/${encodeURIComponent(id)}/`, { sections }, CAMPOS_LISTA));
+    },
+  },
+  operacion: {
+    async equiposDisponibles() {
+      const [equipos, checkins] = await Promise.all([
+        http<EquipoApi[]>("GET", "/catalog/equipments/?status=usable"),
+        http<CheckInApi[]>("GET", "/inspections/checkins/"),
+      ]);
+      const ocupados = new Set(checkins.filter((c) => !c.closed_at).map((c) => c.equipment_code));
+      return equipos.filter((e) => !ocupados.has(e.identifier)).map(aEquipo);
+    },
+    checkins: async () => (await http<CheckInApi[]>("GET", "/inspections/checkins/")).map(aCheckIn),
+    iniciarCheckin: async (codigo, horometroInicial) => aCheckIn(await http<CheckInApi>(
+      "POST",
+      "/inspections/checkins/",
+      { equipment: codigo, hour_meter_start: horometroInicial },
+      { equipment: "equipo", hour_meter_start: "horometroInicial" },
+    )),
+    cerrarCheckin: async (id, horometroFinal) => aCheckIn(await http<CheckInApi>(
+      "POST",
+      `/inspections/checkins/${id}/close/`,
+      { hour_meter_end: horometroFinal },
+      { hour_meter_end: "horometroFinal" },
+    )),
+    async listaParaEquipo(codigo) {
+      const equipo = await http<EquipoApi>("GET", `/catalog/equipments/${encodeURIComponent(codigo)}/`);
+      const listas = await http<ListaApi[]>(
+        "GET",
+        `/catalog/checklists/?equipment_types=${equipo.equipment_type}&is_active=true`,
+      );
+      const lista = listas.find((l) => l.equipment_types_detail.some((t) => t.id === equipo.equipment_type));
+      if (!lista) throw new ApiError(404, { detail: ["Este equipo no tiene una lista de inspección activa."] });
+      return {
+        id: lista.identifier,
+        nombre: lista.name,
+        version: lista.version,
+        secciones: lista.sections.map((s) => ({
+          titulo: s.title,
+          items: s.items.map((i) => ({ id: i.identifier, texto: i.text, critico: i.is_critical })),
+        })),
+      };
+    },
+    async inspeccionParaCheckin(checkin) {
+      const registros = await http<InspeccionApi[]>(
+        "GET",
+        `/inspections/records/?equipment=${encodeURIComponent(checkin.equipo)}`,
+      );
+      const registro = registros.find((r) => r.checkin === checkin.id);
+      return registro ? {
+        id: registro.id,
+        resultadoGlobal: registro.global_result,
+        esCritica: registro.es_critica,
+      } : null;
+    },
+    async registrarInspeccion(datos) {
+      const inspeccion = await http<InspeccionApi>("POST", "/inspections/records/", {
+        equipment: datos.equipo,
+        checklist: datos.lista,
+        checkin: datos.checkin,
+        general_notes: datos.observacionGeneral,
+        responses: datos.respuestas.map((r) => ({ item: r.item, result: r.resultado, notes: r.observacion })),
+      }, { equipment: "equipo", checklist: "lista", checkin: "checkin", responses: "respuestas", general_notes: "observacionGeneral" });
+      return { id: inspeccion.id, resultadoGlobal: inspeccion.global_result, esCritica: inspeccion.es_critica };
+    },
+    registrarNovedad: async (datos) => aRegistro(await http<RegistroApi>("POST", "/news/", {
+      equipment: datos.equipo,
+      tipo: datos.tipo,
+      description: datos.descripcion,
+      general_notes: datos.observacion,
+    })),
+    registrarIncidente: async (datos) => aRegistro(await http<RegistroApi>("POST", "/incidents/", {
+      equipment: datos.equipo,
+      occurred_at: datos.ocurridoEn,
+      description: datos.descripcion,
+      severidad: datos.severidad,
+    })),
+    async subirEvidencia(tipo, idRegistro, archivo) {
+      const cuerpo = new FormData();
+      cuerpo.append("record_type", tipo);
+      cuerpo.append("record_id", String(idRegistro));
+      cuerpo.append("file", archivo);
+      return aEvidencia(await http<EvidenciaApi>(
+        "POST",
+        "/inspections/evidence/",
+        cuerpo,
+        { file: "archivo", record_id: "registro" },
+      ));
     },
   },
 };

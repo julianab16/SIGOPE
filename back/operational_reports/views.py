@@ -1,9 +1,10 @@
 from rest_framework import viewsets
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
-from accounts.models import AccessLevel, Module
+from accounts.models import AccessLevel, Module, User
 from accounts.permissions import HasModulePermission
 from common.filters.operational import filter_operational_records
+from rest_framework.exceptions import PermissionDenied
 
 from .models import Evidence, Incident, News
 from .serializers import EvidenceSerializer, IncidentSerializer, NewsSerializer
@@ -54,6 +55,13 @@ class IncidentViewSet(OperationalReportViewSet):
             severities=Incident.Severity.choices,
             severity_field="severity",
         )
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        incident = serializer.instance
+        if user.role == User.Role.OPERARIO and incident.reported_by_id == user.pk:
+            raise PermissionDenied("No puedes editar un incidente después de reportarlo.")
+        serializer.save()
 
 
 class EvidencePermission(BasePermission):

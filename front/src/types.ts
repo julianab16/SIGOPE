@@ -75,4 +75,56 @@ export type Sesion = {
   rol: string;
   esAdmin: boolean; // rol Administrador o superusuario
   debeCambiarClave: boolean; // tiene una contraseña temporal
+  permisos: Record<Modulo, Nivel>;
 };
+
+export type CheckIn = {
+  id: number;
+  equipo: string;
+  codigoEquipo: string;
+  horometroInicial: string;
+  horometroFinal: string;
+  iniciadoEn: string;
+  finalizadoEn: string | null;
+  listaId: string | null;
+};
+
+export type ListaOperativa = {
+  id: string;
+  nombre: string;
+  version: number;
+  secciones: {
+    titulo: string;
+    items: { id: string; texto: string; critico: boolean }[];
+  }[];
+};
+
+export type ResultadoInspeccion = {
+  id: number;
+  resultadoGlobal: string;
+  esCritica: boolean;
+};
+
+export type TipoRegistroOperativo = "inspection" | "news" | "incident";
+
+export type EvidenciaAdjunta = {
+  id: number;
+  tipoRegistro: TipoRegistroOperativo;
+  idRegistro: number;
+  url: string;
+  nombre: string;
+};
+
+export type RegistroOperativo = {
+  id: number;
+  estado: string;
+  creadoEn: string;
+};
+
+export type TipoNovedad =
+  | "mechanical_failure"
+  | "unsafe_condition"
+  | "damage"
+  | "environmental";
+
+export type SeveridadIncidente = "leve" | "media" | "grave";

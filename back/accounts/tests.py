@@ -20,7 +20,7 @@ class AccountApiTests(APITestCase):
 
         response = self.client.post(
             "/api/auth/login/",
-            {"username": " ADMIN ", "password": "Admin-password-123"},
+            {"username": f" {self.admin.username.upper()} ", "password": "Admin-password-123"},
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -58,7 +58,7 @@ class AccountApiTests(APITestCase):
         response = self.client.post(
             "/api/accounts/users/",
             {
-                "username": " New.User ",
+                "username": "ignored.username",
                 "full_name": " New User ",
                 "document": " 10000002 ",
                 "role": User.Role.OPERARIO,
@@ -67,12 +67,12 @@ class AccountApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         user = User.objects.get(document="10000002")
-        self.assertEqual(user.username, "new.user")
+        self.assertEqual(user.username, "n10000002u")
+        self.assertEqual(response.data["username"], "n10000002u")
         self.assertEqual(user.full_name, "New User")
         self.assertTrue(user.must_change_password)
         self.assertTrue(user.check_password(response.data["temporary_password"]))
         self.assertNotIn("password", response.data)
-
     def test_cannot_create_user_with_duplicate_document(self):
         response = self.client.post(
             "/api/accounts/users/",
@@ -117,7 +117,7 @@ class AccountApiTests(APITestCase):
         response = self.client.post("/api/accounts/users/", payload)
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertFalse(User.objects.filter(username="operator").exists())
+        self.assertFalse(User.objects.filter(document="10000007").exists())
 
     def test_user_can_change_password_and_clear_temporary_password_flag(self):
         user = User.objects.create_user(
@@ -180,7 +180,7 @@ class AccountApiTests(APITestCase):
         self.client.force_authenticate(user=None)
         login = self.client.post(
             "/api/auth/login/",
-            {"username": "admin", "password": "Admin-password-123"},
+            {"username": self.admin.username, "password": "Admin-password-123"},
         )
 
         logout = self.client.post(
@@ -293,21 +293,25 @@ class AccountApiTests(APITestCase):
         self.assertEqual(response.data["code"], "field_team_2")
 
 
-    def test_cannot_create_user_with_duplicate_username_case_insensitively(self):
-        response = self.client.post(
-            "/api/accounts/users/",
-            {
-                "username": " ADMIN ",
-                "full_name": "Another Admin",
-                "document": "10000010",
-                "role": User.Role.OPERARIO,
-                "password": "Another-password-123",
-            },
+    def test_username_is_regenerated_when_user_name_changes(self):
+        user = User.objects.create_user(
+            username="a10000009r",
+            password="Operator-password-123",
+            document="10000009",
+            full_name="Alice Rivera",
+            role=User.Role.OPERARIO,
         )
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(User.objects.filter(username="admin").count(), 1)
+        response = self.client.patch(
+            f"/api/accounts/users/{user.pk}/",
+            {"full_name": "Beatriz Gomez"},
+            format="json",
+        )
 
+        user.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(user.username, "b10000009g")
+        self.assertEqual(response.data["username"], "b10000009g")
     def test_updated_role_permissions_apply_to_subsequent_requests(self):
         role = Role.objects.create(
             code="temporary_viewer",
@@ -341,3 +345,5 @@ class AccountApiTests(APITestCase):
         self.assertEqual(denied_response.status_code, status.HTTP_403_FORBIDDEN)
         role.refresh_from_db()
         self.assertEqual(role.permissions[Module.USERS], AccessLevel.NONE)
+
+

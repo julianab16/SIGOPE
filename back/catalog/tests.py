@@ -101,30 +101,34 @@ class CatalogApiTests(APITestCase):
         self.assertEqual(delete.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(EquipmentType.objects.filter(pk=equipment_type.pk).exists())
 
-    def test_equipment_identifier_is_normalized_and_immutable(self):
+    def test_equipment_identifier_is_generated_and_immutable(self):
         equipment_type = EquipmentType.objects.create(name="Truck")
         create_response = self.client.post(
             "/api/catalog/equipments/",
             {
-                "identifier": " trk-02 ",
+                "number": 2,
                 "equipment_type": equipment_type.pk,
                 "model": "  Model Y  ",
                 "year": 2024,
+                "serial_number": " SN-002 ",
+                "hour_meter": "1250",
             },
+            format="json",
         )
         update_response = self.client.patch(
-            "/api/catalog/equipments/TRK-02/", {"identifier": "TRK-03"}
+            "/api/catalog/equipments/TRU-002/", {"identifier": "TRU-003"}
         )
 
         self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(create_response.data["identifier"], "TRK-02")
+        self.assertEqual(create_response.data["identifier"], "TRU-002")
         self.assertEqual(create_response.data["model"], "Model Y")
-        self.assertEqual(update_response.status_code, status.HTTP_400_BAD_REQUEST)
-
+        self.assertEqual(create_response.data["serial_number"], "SN-002")
+        self.assertEqual(update_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(update_response.data["identifier"], "TRU-002")
     def test_equipment_rejects_duplicate_plate_and_inactive_type(self):
         equipment_type = EquipmentType.objects.create(name="Truck")
         Equipment.objects.create(
-            identifier="TRK-03",
+            identifier="TRU-003",
             plate="ABC-123",
             equipment_type=equipment_type,
             model="Model Z",
@@ -132,26 +136,27 @@ class CatalogApiTests(APITestCase):
         duplicate_plate = self.client.post(
             "/api/catalog/equipments/",
             {
-                "identifier": "TRK-04",
+                "number": 4,
                 "plate": "abc-123",
                 "equipment_type": equipment_type.pk,
                 "model": "Model W",
             },
+            format="json",
         )
         equipment_type.is_active = False
         equipment_type.save(update_fields=["is_active"])
         inactive_type = self.client.post(
             "/api/catalog/equipments/",
             {
-                "identifier": "TRK-05",
+                "number": 5,
                 "equipment_type": equipment_type.pk,
                 "model": "Model V",
             },
+            format="json",
         )
 
         self.assertEqual(duplicate_plate.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(inactive_type.status_code, status.HTTP_400_BAD_REQUEST)
-
     def test_equipment_updates_and_returns_history(self):
         equipment_type = EquipmentType.objects.create(name="Truck")
         equipment = Equipment.objects.create(
@@ -178,19 +183,21 @@ class CatalogApiTests(APITestCase):
         item_response = self.client.post(
             "/api/catalog/items/",
             {
-                "identifier": "HYD-01",
                 "name": "Check hoses",
                 "category": category.pk,
                 "is_critical": True,
             },
+            format="json",
         )
 
         self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
         category.refresh_from_db()
         self.assertFalse(category.is_active)
         self.assertEqual(item_response.status_code, status.HTTP_201_CREATED)
-        self.assertTrue(ChecklistItem.objects.filter(identifier="HYD-01").exists())
-
+        self.assertRegex(item_response.data["identifier"], r"^ITM-HYD-[A-F0-9]{6}$")
+        self.assertTrue(
+            ChecklistItem.objects.filter(identifier=item_response.data["identifier"]).exists()
+        )
     def test_checklist_creation_saves_version_snapshot_and_update_increments_version(self):
         equipment_type = EquipmentType.objects.create(name="Loader")
         payload = {
@@ -330,10 +337,10 @@ class CatalogApiTests(APITestCase):
         self.assertEqual(list(checklist.items.values_list("identifier", flat=True)), ["ENG-01"])
 
 
-    def test_equipment_rejects_duplicate_identifier_case_insensitively(self):
+    def test_equipment_rejects_duplicate_generated_number_for_same_type(self):
         equipment_type = EquipmentType.objects.create(name="Dump Truck")
         Equipment.objects.create(
-            identifier="DT-01",
+            identifier="DUM-001",
             equipment_type=equipment_type,
             model="Model A",
         )
@@ -341,15 +348,15 @@ class CatalogApiTests(APITestCase):
         response = self.client.post(
             "/api/catalog/equipments/",
             {
-                "identifier": " dt-01 ",
+                "number": 1,
                 "equipment_type": equipment_type.pk,
                 "model": "Model B",
             },
+            format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(Equipment.objects.filter(identifier__iexact="DT-01").count(), 1)
-
+        self.assertEqual(Equipment.objects.filter(identifier="DUM-001").count(), 1)
     def test_equipment_with_inspections_cannot_be_deleted(self):
         from inspections.models import Inspection
 
@@ -372,6 +379,46 @@ class CatalogApiTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertTrue(Equipment.objects.filter(pk=equipment.identifier).exists())
+
+    def test_equipment_number_is_required_and_must_be_between_one_and_999(self):
+        equipment_type = EquipmentType.objects.create(name="Excavator")
+        missing_number = self.client.post(
+            "/api/catalog/equipments/",
+            {"equipment_type": equipment_type.pk, "model": "Model X"},
+            format="json",
+        )
+        out_of_range = self.client.post(
+            "/api/catalog/equipments/",
+            {"number": 1000, "equipment_type": equipment_type.pk, "model": "Model Y"},
+            format="json",
+        )
+
+        self.assertEqual(missing_number.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(out_of_range.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_equipment_number_cannot_be_changed_after_creation(self):
+        equipment_type = EquipmentType.objects.create(name="Loader")
+        Equipment.objects.create(
+            identifier="LOA-010", equipment_type=equipment_type, model="Loader Model"
+        )
+
+        response = self.client.patch(
+            "/api/catalog/equipments/LOA-010/", {"number": 11}, format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(Equipment.objects.filter(pk="LOA-010").exists())
+
+    def test_equipment_type_exposes_required_license(self):
+        response = self.client.post(
+            "/api/catalog/equipment-types/",
+            {"name": "Bus", "required_license": "C2"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["required_license"], "C2")
+        self.assertEqual(EquipmentType.objects.get(name="Bus").required_license, "C2")
 
     def test_previous_checklist_version_keeps_its_original_items_after_update(self):
         equipment_type = EquipmentType.objects.create(name="Excavator")
@@ -406,3 +453,7 @@ class CatalogApiTests(APITestCase):
         self.assertEqual(update_response.status_code, status.HTTP_200_OK)
         self.assertEqual(old_snapshot.sections[0]["items"][0]["text"], "Check oil level")
         self.assertEqual(new_snapshot.sections[0]["items"][0]["text"], "Check coolant level")
+
+
+
+

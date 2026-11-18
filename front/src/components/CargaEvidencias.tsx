@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../services/api";
 import type { EvidenciaAdjunta, TipoRegistroOperativo } from "../types";
 import { btnPrimary, Icon, textoError } from "./ui";
@@ -57,11 +57,20 @@ async function comprimirImagen(archivo: File) {
   }
 }
 
-export default function CargaEvidencias({ tipo, idRegistro }: { tipo: TipoRegistroOperativo; idRegistro: number }) {
+export default function CargaEvidencias({
+  tipo,
+  idRegistro,
+  automatico = false,
+}: {
+  tipo: TipoRegistroOperativo;
+  idRegistro?: number;
+  automatico?: boolean;
+}) {
   const [archivos, setArchivos] = useState<File[]>([]);
   const [subidos, setSubidos] = useState<EvidenciaAdjunta[]>([]);
   const [subiendo, setSubiendo] = useState(false);
   const [error, setError] = useState("");
+  const cargaAutomatica = useRef<number | null>(null);
 
   const seleccionar = async (seleccionados: FileList | null) => {
     if (!seleccionados?.length) return;
@@ -84,6 +93,7 @@ export default function CargaEvidencias({ tipo, idRegistro }: { tipo: TipoRegist
   };
 
   const subir = async () => {
+    if (idRegistro === undefined) return;
     setSubiendo(true);
     setError("");
     try {
@@ -99,15 +109,22 @@ export default function CargaEvidencias({ tipo, idRegistro }: { tipo: TipoRegist
     }
   };
 
+  useEffect(() => {
+    if (!automatico || idRegistro === undefined || !archivos.length || cargaAutomatica.current === idRegistro) return;
+    cargaAutomatica.current = idRegistro;
+    void subir();
+  }, [automatico, idRegistro]);
+
   return <section className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:p-5">
-    <h3 className="font-black">Evidencias</h3>
+    <h3 className="font-black">Evidencias (opcional)</h3>
     <p className="mt-1 text-sm text-slate-500">Hasta 5 archivos JPG, PNG o PDF, máximo 5 MB cada uno.</p>
+    {idRegistro === undefined && <p className="mt-1 text-xs font-semibold text-slate-500">Se adjuntarán al guardar el reporte. Puedes continuar sin archivos.</p>}
     <label className="mt-4 flex min-h-12 cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-white px-4 text-sm font-bold text-slate-600 hover:border-[#F5B800]">
       <Icon name="plus" size={18} />Seleccionar archivos
-      <input className="sr-only" type="file" accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf" multiple onChange={(e) => { void seleccionar(e.target.files); e.currentTarget.value = ""; }} />
+      <input className="sr-only" type="file" disabled={subiendo} accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf" multiple onChange={(e) => { void seleccionar(e.target.files); e.currentTarget.value = ""; }} />
     </label>
-    {archivos.length > 0 && <ul className="mt-3 space-y-2">{archivos.map((f) => <li key={`${f.name}-${f.lastModified}`} className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-sm"><span className="min-w-0 truncate font-semibold">{f.name}</span><button aria-label={`Quitar ${f.name}`} onClick={() => setArchivos(archivos.filter((x) => x !== f))} className="text-slate-400 hover:text-red-600"><Icon name="x" size={17} /></button></li>)}</ul>}
-    {archivos.length > 0 && <button disabled={subiendo} onClick={subir} className={`${btnPrimary} mt-3 w-full`}>{subiendo ? "Subiendo..." : "Subir evidencias"}</button>}
+    {archivos.length > 0 && <ul className="mt-3 space-y-2">{archivos.map((f) => <li key={`${f.name}-${f.lastModified}`} className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2 text-sm"><span className="min-w-0 truncate font-semibold">{f.name}</span><button type="button" disabled={subiendo} aria-label={`Quitar ${f.name}`} onClick={() => setArchivos(archivos.filter((x) => x !== f))} className="text-slate-400 hover:text-red-600 disabled:opacity-50"><Icon name="x" size={17} /></button></li>)}</ul>}
+    {archivos.length > 0 && idRegistro !== undefined && <button type="button" disabled={subiendo} onClick={() => void subir()} className={`${btnPrimary} mt-3 w-full`}>{subiendo ? "Subiendo..." : "Subir evidencias"}</button>}
     {subidos.length > 0 && <ul className="mt-3 space-y-2">{subidos.map((e) => <li key={e.id} className="flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-bold text-emerald-800"><Icon name="check" size={17} /><a href={e.url} target="_blank" rel="noreferrer" className="truncate underline">{e.nombre}</a></li>)}</ul>}
     {error && <p role="alert" className="mt-3 text-sm font-bold text-red-700">{error}</p>}
   </section>;

@@ -202,4 +202,5 @@ class EvidenceSerializer(serializers.ModelSerializer):
         attrs["content_type"] = content_type
         attrs["object_id"] = target.pk
         attrs.pop("record_type")
+        attrs.pop("record_id")
         return attrs

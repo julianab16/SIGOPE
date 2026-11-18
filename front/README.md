@@ -90,7 +90,8 @@ Todas las rutas van bajo `{VITE_API_URL}/api`. Las peticiones envían `Authoriza
 | Cerrar check-in con horómetro final | `POST /inspections/checkins/{id}/close/` |
 | Consultar lista vigente y registrar inspección | `GET /catalog/checklists/`, `POST /inspections/records/` |
 | Registrar novedad / incidente | `POST /news/`, `POST /incidents/` |
-| Adjuntar evidencia | `POST /inspections/evidence/` (`multipart/form-data`) |
+| Adjuntar evidencia a una inspección | `POST /inspections/evidence/` (`multipart/form-data`) |
+| Adjuntar evidencia a una novedad o incidente | `POST /evidence/` (`multipart/form-data`) |
 
 El detalle de cada endpoint está en `../back/README.md` y en Swagger (`http://localhost:8000/api/docs/`).
 
@@ -100,7 +101,7 @@ El detalle de cada endpoint está en `../back/README.md` y en Swagger (`http://l
 - Inicia el check-in con la lectura inicial del horómetro; la fecha y hora de inicio provienen del backend. Completa la lista vigente del tipo de equipo y cierra el uso con una lectura final igual o mayor a la inicial.
 - Cada ítem de inspección requiere una respuesta: **Cumple**, **No cumple** o **No aplica**. Se pueden añadir observaciones por ítem y una observación general; el resultado crítico se muestra según la respuesta del backend.
 - Registra novedades con los tipos definidos por la API e incidentes con fecha/hora del evento y severidad. La etiqueta **Moderado** se envía como `media`.
-- Después de crear una inspección, novedad o incidente, puede adjuntar hasta cinco evidencias JPG/JPEG, PNG o PDF, de máximo 5 MB por archivo. Las imágenes grandes se comprimen en el navegador; los PDF que superen el límite se rechazan. La respuesta permite abrir la evidencia subida.
+- Al registrar una novedad o un incidente, se pueden seleccionar evidencias opcionales en el mismo formulario; se suben al guardar el reporte. También se pueden adjuntar hasta cinco archivos JPG/JPEG, PNG o PDF, de máximo 5 MB cada uno, a inspecciones. Las imágenes grandes se comprimen en el navegador; los PDF que superen el límite se rechazan. La respuesta permite abrir las evidencias subidas.
 
 ### Reglas que valida el backend
 

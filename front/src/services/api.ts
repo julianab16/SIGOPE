@@ -411,13 +411,13 @@ const httpApi: Api = {
       tipo: datos.tipo,
       description: datos.descripcion,
       general_notes: datos.observacion,
-    })),
+    }, { equipment: "equipo", tipo: "tipo", description: "descripcion", general_notes: "observacion" })),
     registrarIncidente: async (datos) => aRegistro(await http<RegistroApi>("POST", "/incidents/", {
       equipment: datos.equipo,
       occurred_at: datos.ocurridoEn,
       description: datos.descripcion,
       severidad: datos.severidad,
-    })),
+    }, { equipment: "equipo", occurred_at: "ocurridoEn", description: "descripcion", severidad: "severidad", severity: "severidad" })),
     async subirEvidencia(tipo, idRegistro, archivo) {
       const cuerpo = new FormData();
       cuerpo.append("record_type", tipo);
@@ -425,7 +425,7 @@ const httpApi: Api = {
       cuerpo.append("file", archivo);
       return aEvidencia(await http<EvidenciaApi>(
         "POST",
-        "/inspections/evidence/",
+        tipo === "inspection" ? "/inspections/evidence/" : "/evidence/",
         cuerpo,
         { file: "archivo", record_id: "registro" },
       ));

@@ -11,7 +11,7 @@ class NewsSerializer(serializers.ModelSerializer):
     performed_at = serializers.DateTimeField(source="reported_at", read_only=True)
     tipo = serializers.ChoiceField(source="type", choices=News.Type.choices, required=True)
     estado = serializers.CharField(source="status", read_only=True)
-    general_notes = serializers.CharField(source="notes", required=False)
+    general_notes = serializers.CharField(source="notes", required=False, allow_blank=True)
     equipment_code = serializers.CharField(source="equipment.identifier", read_only=True)
     equipment_type = serializers.CharField(source="equipment.equipment_type.name", read_only=True)
     reporter_id = serializers.IntegerField(source="reported_by_id", read_only=True)
@@ -32,7 +32,7 @@ class IncidentSerializer(serializers.ModelSerializer):
     performed_at = serializers.DateTimeField(source="reported_at", read_only=True)
     estado = serializers.CharField(source="status", read_only=True)
     severidad = serializers.ChoiceField(source="severity", choices=Incident.Severity.choices, required=True)
-    general_notes = serializers.CharField(source="notes", required=False)
+    general_notes = serializers.CharField(source="notes", required=False, allow_blank=True)
     equipment_code = serializers.CharField(source="equipment.identifier", read_only=True)
     equipment_type = serializers.CharField(source="equipment.equipment_type.name", read_only=True)
     reporter_id = serializers.IntegerField(source="reported_by_id", read_only=True)
@@ -86,4 +86,5 @@ class EvidenceSerializer(serializers.ModelSerializer):
         attrs["content_type"] = content_type
         attrs["object_id"] = target.pk
         attrs.pop("record_type")
+        attrs.pop("record_id")
         return attrs

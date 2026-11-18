@@ -557,12 +557,15 @@ los demás cambios siguen sujetos a los permisos del módulo.
 | --- | --- | --- |
 | `GET` | `/api/inspections/evidence/` | `application/json` |
 | `GET` | `/api/inspections/evidence/{id}/` | `application/json` |
-| `POST` | `/api/inspections/evidence/` | `multipart/form-data` |
+| `POST` | `/api/inspections/evidence/` | `multipart/form-data` para inspecciones |
+| `GET`, `POST` | `/api/evidence/` | `application/json` / `multipart/form-data` para novedades e incidentes |
 
 La carga recibe `record_type` (`inspection`, `news` o `incident`), `record_id`
-y `file`. Se aceptan JPG, JPEG, PNG y PDF; cada archivo debe pesar como máximo
-5 MB y cada registro puede tener hasta cinco archivos. El usuario autenticado
-queda como `uploaded_by` y la respuesta incluye la URL `url` para visualizarlo.
+y `file`. Usa `/api/inspections/evidence/` para inspecciones y `/api/evidence/`
+para novedades e incidentes. Se aceptan JPG, JPEG, PNG y PDF; cada archivo
+debe pesar como máximo 5 MB y cada registro puede tener hasta cinco archivos.
+El usuario autenticado queda como `uploaded_by` y la respuesta incluye la URL
+`url` para visualizarlo.
 Los errores de formato, tamaño, registro inexistente o límite de archivos
 responden `400` con el campo que debe corregirse.
 

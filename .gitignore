@@ -32,6 +32,7 @@ ENV/
 *.log
 db.sqlite3
 db.sqlite3-journal
+back/evidence/
 media/
 staticfiles/
 
@@ -54,3 +55,4 @@ pnpm-debug.log*
 *.swo
 .DS_Store
 Thumbs.db
+.vscode

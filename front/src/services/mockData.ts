@@ -4,12 +4,12 @@
 import { MODULOS, type Equipo, type Item, type ListaInspeccion, type Modulo, type Nivel, type Rol, type Seccion, type TipoEquipo, type Usuario } from "../types";
 
 export const usuarios: Usuario[] = [
-  { id: 1, nombre: "Carlos Rodríguez", documento: "16742859", usuario: "crodriguez", rol: "Operario", activo: true },
-  { id: 2, nombre: "Jhon Valencia", documento: "94381220", usuario: "jvalencia", rol: "Operario", activo: true },
-  { id: 3, nombre: "Andrés Mosquera", documento: "1130644871", usuario: "amosquera", rol: "Jefe de Taller", activo: true },
-  { id: 4, nombre: "Laura Martínez", documento: "31987456", usuario: "lmartinez", rol: "SST", activo: true },
-  { id: 5, nombre: "Óscar Mina", documento: "16289004", usuario: "omina", rol: "Operario", activo: false },
-  { id: 6, nombre: "Patricia Gómez", documento: "66851230", usuario: "pgomez", rol: "Administrador", activo: true },
+  { id: 1, nombre: "Carlos Rodríguez", documento: "16742859", usuario: "crodriguez", rol: "Operario", activo: true, licencias: [] },
+  { id: 2, nombre: "Jhon Valencia", documento: "94381220", usuario: "jvalencia", rol: "Operario", activo: true, licencias: [] },
+  { id: 3, nombre: "Andrés Mosquera", documento: "1130644871", usuario: "amosquera", rol: "Jefe de Taller", activo: true, licencias: [] },
+  { id: 4, nombre: "Laura Martínez", documento: "31987456", usuario: "lmartinez", rol: "SST", activo: true, licencias: [] },
+  { id: 5, nombre: "Óscar Mina", documento: "16289004", usuario: "omina", rol: "Operario", activo: false, licencias: [] },
+  { id: 6, nombre: "Patricia Gómez", documento: "66851230", usuario: "pgomez", rol: "Administrador", activo: true, licencias: [] },
 ];
 // Contraseña de prueba para cualquier usuario activo
 export const CLAVE_PRUEBA = "Sigope2025";
@@ -25,9 +25,9 @@ export const roles: Rol[] = [
 ];
 
 export const tipos: TipoEquipo[] = [
-  { id: 1, nombre: "Cargadores", descripcion: "Cargadores Caterpillar y SEM-CAT", activo: true },
-  { id: 2, nombre: "Volquetas", descripcion: "Volquetas de fabricación propia y Foton Auman 8x4", activo: true },
-  { id: 3, nombre: "Compresores / Wagon drill", descripcion: "Compresores Kaishan y Atlas Copco", activo: true },
+  { id: 1, nombre: "Cargadores", descripcion: "Cargadores Caterpillar y SEM-CAT", activo: true, licencia: "" },
+  { id: 2, nombre: "Volquetas", descripcion: "Volquetas de fabricación propia y Foton Auman 8x4", activo: true, licencia: "" },
+  { id: 3, nombre: "Compresores / Wagon drill", descripcion: "Compresores Kaishan y Atlas Copco", activo: true, licencia: "" },
 ];
 
 const eq = (codigo: string, tipo: string, marca: string, serie: string, anio: string, horometro: string): Omit<Equipo, "id"> => ({ codigo, placa: "", tipo, marca, serie, anio, horometro, estado: "Disponible", modificado: "Carga inicial · 28/10/2026" });

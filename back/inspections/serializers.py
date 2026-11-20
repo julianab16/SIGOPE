@@ -19,15 +19,28 @@ class CheckInSerializer(serializers.ModelSerializer):
     operator = serializers.PrimaryKeyRelatedField(read_only=True)
     equipment_code = serializers.CharField(source="equipment.identifier", read_only=True)
     checklist_id = serializers.SerializerMethodField()
+    inspection = serializers.SerializerMethodField()
 
     class Meta:
         model = EquipmentCheckIn
-        fields = ("id", "equipment", "equipment_code", "operator", "hour_meter_start", "hour_meter_end", "checked_in_at", "closed_at", "checklist_id")
+        fields = ("id", "equipment", "equipment_code", "operator", "hour_meter_start", "hour_meter_end", "checked_in_at", "closed_at", "checklist_id", "inspection")
         read_only_fields = ("id", "hour_meter_end", "checked_in_at", "closed_at")
 
     def get_checklist_id(self, obj):
         checklist = InspectionChecklist.objects.filter(equipment_types=obj.equipment.equipment_type, is_active=True).first()
         return checklist.pk if checklist else None
+
+    def get_inspection(self, obj) -> dict | None:
+        """Inspección hecha en este uso: pendiente de envío (in_progress) o enviada (completed)."""
+        inspection = getattr(obj, "inspection", None)
+        if not inspection:
+            return None
+        return {
+            "id": inspection.pk,
+            "status": inspection.status,
+            "global_result": inspection.global_result,
+            "es_critica": inspection.global_result == Inspection.GlobalResult.CRITICAL_FAILURE,
+        }
 
     def validate_hour_meter_start(self, value):
         if value < 0:
@@ -50,6 +63,11 @@ class CheckInSerializer(serializers.ModelSerializer):
 
 class CheckInCloseSerializer(serializers.Serializer):
     hour_meter_end = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0)
+    general_notes = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="Observación final de la inspección pendiente (ej. por qué no se usó el vehículo).",
+    )
 
     def validate(self, attrs):
         checkin = self.context["checkin"]
@@ -119,6 +137,14 @@ class InspectionSerializer(serializers.ModelSerializer):
         checkin = attrs.get("checkin")
         equipment = checkin.equipment if checkin else attrs["equipment"]
         checklist = attrs["checklist"]
+        if attrs.get("status") == Inspection.Status.IN_PROGRESS:
+            # Pendiente de envío: se envía sola al cerrar el uso con el horómetro final.
+            if not checkin:
+                raise serializers.ValidationError(
+                    {"status": "Una inspección pendiente de envío debe estar ligada a un uso del equipo."}
+                )
+            if checkin.closed_at:
+                raise serializers.ValidationError({"checkin": "Este uso del equipo ya se cerró."})
         if checkin:
             request = self.context["request"]
             if checkin.equipment_id != equipment.pk or checkin.operator_id != request.user.pk:
@@ -147,7 +173,8 @@ class InspectionSerializer(serializers.ModelSerializer):
         checkin = validated_data.get("checkin")
         critical_items = set(checklist.items.filter(is_critical=True).values_list("pk", flat=True))
         critical_failure = any(r["item"].pk in critical_items and r["result"] == InspectionResponse.Result.DOES_NOT_COMPLY for r in responses)
-        validated_data["status"] = Inspection.Status.COMPLETED
+        # Por defecto se envía de una vez; con status=in_progress queda pendiente hasta cerrar el uso.
+        validated_data["status"] = validated_data.get("status", Inspection.Status.COMPLETED)
         validated_data["global_result"] = Inspection.GlobalResult.CRITICAL_FAILURE if critical_failure else Inspection.GlobalResult.COMPLETED
         if checkin:
             validated_data["equipment"] = checkin.equipment

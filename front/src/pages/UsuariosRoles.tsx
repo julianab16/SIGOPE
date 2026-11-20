@@ -2,7 +2,8 @@
 import { useEffect, useState } from "react";
 import { Cargando, ClaveTemporal, Drawer, Field, Icon, Status, Switch, Tabs, Toast, btnGhost, btnPrimary, card, erroresDeFormulario, input, td, textoError, th, type Aviso } from "../components/ui";
 import { api } from "../services/api";
-import { MODULOS, NIVELES, type Modulo, type Nivel, type Rol, type Usuario } from "../types";
+import { usuarioGenerado } from "../services/codigos";
+import { LICENCIAS, MODULOS, NIVELES, type DatosUsuario, type Modulo, type Nivel, type Rol, type Usuario } from "../types";
 
 export default function UsuariosRoles() {
   const [tab, setTab] = useState("Usuarios");
@@ -16,12 +17,12 @@ export default function UsuariosRoles() {
   </>;
 }
 
-const vacio: Omit<Usuario, "id"> = { nombre: "", documento: "", usuario: "", rol: "Operario", activo: true };
+const vacio: DatosUsuario = { nombre: "", documento: "", rol: "Operario", activo: true, licencias: [] };
 
 function Usuarios({ roles }: { roles: Rol[] }) {
   const [lista, setLista] = useState<Usuario[] | null>(null);
   const [q, setQ] = useState(""); const [rol, setRol] = useState("Todos");
-  const [form, setForm] = useState<{ id?: number; data: Omit<Usuario, "id"> } | null>(null);
+  const [form, setForm] = useState<{ id?: number; usuarioActual?: string; data: DatosUsuario } | null>(null);
   const [errores, setErrores] = useState<Record<string, string>>({});
   const [guardando, setGuardando] = useState(false);
   const [reset, setReset] = useState<Usuario | null>(null);
@@ -32,14 +33,17 @@ function Usuarios({ roles }: { roles: Rol[] }) {
   if (!lista) return <Cargando />;
 
   const vistos = lista.filter((u) => (rol === "Todos" || u.rol === rol) && `${u.nombre} ${u.documento} ${u.usuario}`.toLowerCase().includes(q.toLowerCase()));
-  const abrir = (u?: Usuario) => { setErrores({}); setForm(u ? { id: u.id, data: { ...u } } : { data: { ...vacio } }); };
-  const set = (k: keyof Usuario, v: string | boolean) => form && setForm({ ...form, data: { ...form.data, [k]: v } });
+  const abrir = (u?: Usuario) => {
+    setErrores({});
+    setForm(u ? { id: u.id, usuarioActual: u.usuario, data: { nombre: u.nombre, documento: u.documento, rol: u.rol, activo: u.activo, licencias: [...u.licencias] } } : { data: { ...vacio, licencias: [] } });
+  };
+  const set = <K extends keyof DatosUsuario>(k: K, v: DatosUsuario[K]) => form && setForm({ ...form, data: { ...form.data, [k]: v } });
+  const alternarLicencia = (l: string) => form && set("licencias", form.data.licencias.includes(l) ? form.data.licencias.filter((x) => x !== l) : [...form.data.licencias, l]);
 
   const guardar = async () => {
     if (!form) return; const d = form.data; const e: Record<string, string> = {};
-    if (!d.nombre.trim()) e.nombre = "Escribe el nombre completo.";
+    if (d.nombre.trim().split(/\s+/).length < 2) e.nombre = "Escribe nombre y apellido: con ellos se genera el usuario.";
     if (!d.documento.trim()) e.documento = "Escribe el número de documento.";
-    if (!d.usuario.trim()) e.usuario = "Escribe el nombre de usuario.";
     setErrores(e); if (Object.keys(e).length) return;
     setGuardando(true);
     try {
@@ -53,7 +57,7 @@ function Usuarios({ roles }: { roles: Rol[] }) {
       }
       setAviso({ texto: form.id ? "Cambios guardados" : "Usuario creado" }); setForm(null);
     } catch (err) {
-      const { campos, resto } = erroresDeFormulario(err, ["nombre", "documento", "usuario"]);
+      const { campos, resto } = erroresDeFormulario(err, ["nombre", "documento", "usuario", "licencias"]);
       setErrores(campos); if (resto) setAviso({ texto: resto, error: true });
     } finally { setGuardando(false); }
   };
@@ -102,8 +106,9 @@ function Usuarios({ roles }: { roles: Rol[] }) {
     {form && <Drawer title={form.id ? "Editar usuario" : "Nuevo usuario"} subtitle="Los campos marcados con * son obligatorios." onClose={() => setForm(null)} footer={<><button className={`${btnGhost} flex-1`} onClick={() => setForm(null)}>Cancelar</button><button disabled={guardando} className={`${btnPrimary} flex-1`} onClick={guardar}><Icon name="check" size={19} />{guardando ? "Guardando..." : "Guardar"}</button></>}>
       <Field label="Nombre completo *" error={errores.nombre}><input className={`${input} w-full ${errores.nombre ? "border-red-500" : "border-slate-200"}`} value={form.data.nombre} onChange={(e) => set("nombre", e.target.value)} placeholder="Ej. Carlos Rodríguez" /></Field>
       <Field label="Número de documento *" error={errores.documento}><input className={`${input} w-full ${errores.documento ? "border-red-500" : "border-slate-200"}`} value={form.data.documento} onChange={(e) => set("documento", e.target.value.replace(/\D/g, ""))} inputMode="numeric" placeholder="Cédula sin puntos" /></Field>
-      <Field label="Usuario *" error={errores.usuario}><input className={`${input} w-full ${errores.usuario ? "border-red-500" : "border-slate-200"}`} value={form.data.usuario} onChange={(e) => set("usuario", e.target.value.toLowerCase())} placeholder="Ej. crodriguez" /></Field>
+      <UsuarioPrevio actual={form.usuarioActual} nuevo={usuarioGenerado(form.data.nombre, form.data.documento)} error={errores.usuario} />
       <Field label="Rol *"><select className={`${input} w-full border-slate-200`} value={form.data.rol} onChange={(e) => set("rol", e.target.value)}>{roles.map((r) => <option key={r.id}>{r.nombre}</option>)}</select></Field>
+      <Field label="Licencias de conducción" error={errores.licencias}><div className="grid grid-cols-3 gap-2">{LICENCIAS.map((l) => { const on = form.data.licencias.includes(l); return <button key={l} type="button" role="checkbox" aria-checked={on} onClick={() => alternarLicencia(l)} className={`flex min-h-12 items-center justify-center gap-1.5 rounded-xl border-2 text-sm font-black ${on ? "border-[#F5B800] bg-[#F5B800]/15 text-[#684C00]" : "border-slate-200 text-slate-500"}`}>{on && <Icon name="check" size={16} />}{l}</button>; })}</div><p className="mt-1.5 text-xs font-semibold text-slate-400">El operario solo puede usar equipos cuyo tipo exige una licencia que tenga.</p></Field>
       <div className="flex items-center justify-between rounded-xl bg-slate-50 p-4"><div><p className="text-sm font-black">Usuario activo</p><p className="mt-0.5 text-xs font-semibold text-slate-500">Si lo desactivas, no podrá iniciar sesión.</p></div><Switch on={form.data.activo} onChange={(v) => set("activo", v)} /></div>
       {!form.id && <div className="flex gap-3 rounded-xl bg-blue-50 p-4 text-sm font-semibold text-blue-800"><Icon name="info" className="mt-0.5 shrink-0" /><p>Se generará una contraseña temporal. El usuario deberá cambiarla en su primer ingreso.</p></div>}
     </Drawer>}
@@ -117,6 +122,20 @@ function Usuarios({ roles }: { roles: Rol[] }) {
     {clave && <ClaveTemporal usuario={clave.usuario} clave={clave.clave} onClose={() => setClave(null)} />}
     {aviso && <Toast text={aviso.texto} error={aviso.error} onClose={() => setAviso(null)} />}
   </>;
+}
+
+/** El usuario para iniciar sesión no se escribe: se genera con el nombre y la cédula. */
+function UsuarioPrevio({ actual, nuevo, error }: { actual?: string; nuevo: string; error?: string }) {
+  const cambia = !!actual && !!nuevo && actual !== nuevo;
+  return <div className={`rounded-xl p-4 ${error ? "bg-red-50" : "bg-slate-50"}`}>
+    <p className="text-xs font-black uppercase tracking-wider text-slate-400">Usuario para iniciar sesión</p>
+    <p className="mt-1 font-mono text-lg font-black text-slate-800">{(cambia ? nuevo : actual || nuevo) || "—"}</p>
+    <p className="mt-1 text-xs font-semibold text-slate-500">
+      {cambia ? <>Cambiará de <strong className="font-mono">{actual}</strong> a <strong className="font-mono">{nuevo}</strong> al guardar. Avísale al usuario (también puede entrar con su cédula).</>
+        : "Se genera solo: inicial del nombre + cédula + inicial del último apellido."}
+    </p>
+    {error && <p className="mt-1 text-xs font-bold text-red-600">{error}</p>}
+  </div>;
 }
 
 function Iniciales({ u }: { u: Usuario }) {

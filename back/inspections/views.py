@@ -1,4 +1,5 @@
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
@@ -39,6 +40,11 @@ class InspectionViewSet(viewsets.ModelViewSet):
             or user.access_level(Module.INSPECTIONS) == AccessLevel.VIEW
         )
         queryset = queryset if sees_all else queryset.filter(performed_by=user)
+        # Las inspecciones pendientes de envío solo las ve quien las hizo.
+        queryset = queryset.exclude(
+            Q(status=Inspection.Status.IN_PROGRESS, checkin__isnull=False, checkin__closed_at__isnull=True)
+            & ~Q(performed_by=user)
+        )
         return filter_operational_records(
             self.request, queryset, statuses=Inspection.Status.choices, critical_filter=True
         )
@@ -51,7 +57,7 @@ class CheckInViewSet(viewsets.ModelViewSet):
     http_method_names = ("get", "post", "head", "options")
 
     def get_queryset(self):
-        queryset = EquipmentCheckIn.objects.select_related("equipment", "equipment__equipment_type", "operator")
+        queryset = EquipmentCheckIn.objects.select_related("equipment", "equipment__equipment_type", "operator", "inspection")
         if self.request.user.is_admin or self.request.user.access_level(Module.INSPECTIONS) == AccessLevel.VIEW:
             return queryset
         return queryset.filter(operator=self.request.user)
@@ -85,6 +91,12 @@ class CheckInViewSet(viewsets.ModelViewSet):
             checkin.save(update_fields=("hour_meter_end", "closed_at"))
         except IntegrityError as exc:
             raise ValidationError("No se pudo cerrar el check-in.") from exc
+        # Al cerrar el uso se envía la inspección que quedó pendiente, con la observación final.
+        cambios = {"status": Inspection.Status.COMPLETED}
+        if "general_notes" in cierre.validated_data:
+            cambios["general_notes"] = cierre.validated_data["general_notes"].strip()
+        Inspection.objects.filter(checkin=checkin, status=Inspection.Status.IN_PROGRESS).update(**cambios)
+        checkin.refresh_from_db()
         return Response(self.get_serializer(checkin).data, status=status.HTTP_200_OK)
 
 

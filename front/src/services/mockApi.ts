@@ -4,6 +4,8 @@ import {
   MODULOS,
   type CheckIn,
   type EvidenciaAdjunta,
+  type ItemBanco,
+  type ListaInspeccion,
   type ListaOperativa,
   type Nivel,
   type Modulo,
@@ -15,13 +17,33 @@ import {
 } from "../types";
 import type { Api } from "./api";
 import { ApiError } from "./ApiError";
+import { codigoEquipo, usuarioGenerado } from "./codigos";
 import * as datos from "./mockData";
 
 const db = structuredClone({ usuarios: datos.usuarios, roles: datos.roles, tipos: datos.tipos, equipos: datos.equipos, listas: datos.listas });
 let sesionActual = "";
+
+// Banco de ítems: se arma con los ítems de las listas de prueba (sin repetir) y cada ítem de lista apunta a él.
+const banco: ItemBanco[] = [];
+for (const lista of db.listas) for (const seccion of lista.secciones) for (const item of seccion.items) {
+  let enBanco = banco.find((b) => b.categoria === seccion.titulo && b.texto === item.texto);
+  if (!enBanco) { enBanco = { id: `ITM-${banco.length + 1}`, texto: item.texto, categoria: seccion.titulo, critico: !!item.critico }; banco.push(enBanco); }
+  item.id = enBanco.id;
+}
+/** Agrupa los ítems elegidos en secciones consecutivas por categoría, como el backend. */
+function seccionesDe(itemIds: string[]): ListaInspeccion["secciones"] {
+  const secciones: ListaInspeccion["secciones"] = [];
+  for (const id of itemIds) {
+    const b = banco.find((x) => x.id === id);
+    if (!b) throw new ApiError(400, { items: [`El ítem ${id} no existe.`] });
+    if (secciones[secciones.length - 1]?.titulo !== b.categoria) secciones.push({ titulo: b.categoria, items: [] });
+    secciones[secciones.length - 1].items.push({ id: b.id, texto: b.texto, critico: b.critico });
+  }
+  return secciones;
+}
 const registros = {
   checkins: [] as (CheckIn & { operador: number })[],
-  inspecciones: [] as (ResultadoInspeccion & { equipo: string; checkin: number; respuestas: string[] })[],
+  inspecciones: [] as (ResultadoInspeccion & { equipo: string; checkin: number; respuestas: string[]; pendiente: boolean })[],
   novedades: [] as (RegistroOperativo & { equipo: string; tipo: TipoNovedad; descripcion: string; observacion: string })[],
   incidentes: [] as (RegistroOperativo & { equipo: string; ocurridoEn: string; descripcion: string; severidad: SeveridadIncidente })[],
   evidencias: [] as EvidenciaAdjunta[],
@@ -37,6 +59,11 @@ const buscar = <T extends { id: number | string }>(lista: T[], id: T["id"]) => {
   if (!x) throw new ApiError(404, { detail: ["No encontrado."] });
   return x;
 };
+
+function conInspeccion(c: CheckIn): CheckIn {
+  const i = registros.inspecciones.find((x) => x.checkin === c.id);
+  return { ...c, inspeccion: i ? { id: i.id, resultadoGlobal: i.resultadoGlobal, esCritica: i.esCritica, pendiente: i.pendiente } : null };
+}
 
 export const mockApi: Api = {
   auth: {
@@ -61,15 +88,17 @@ export const mockApi: Api = {
     listar: async () => esperar(db.usuarios),
     async crear(d) {
       if (db.usuarios.some((u) => u.documento === d.documento)) throw new ApiError(400, { documento: ["Ya existe un usuario con este documento."] });
-      if (db.usuarios.some((u) => u.usuario === d.usuario)) throw new ApiError(400, { usuario: ["Este usuario ya está en uso."] });
-      const nuevo = { ...d, id: siguienteId(db.usuarios) };
+      const usuario = usuarioGenerado(d.nombre, d.documento);
+      if (!usuario) throw new ApiError(400, { nombre: ["Escribe nombre y apellido para generar el usuario."] });
+      const nuevo = { ...d, usuario, id: siguienteId(db.usuarios) };
       db.usuarios.unshift(nuevo);
       return esperar({ ...nuevo, claveTemporal: claveTemporal() });
     },
     async actualizar(id, d) {
       if (d.documento && db.usuarios.some((u) => u.id !== id && u.documento === d.documento)) throw new ApiError(400, { documento: ["Ya existe un usuario con este documento."] });
-      if (d.usuario && db.usuarios.some((u) => u.id !== id && u.usuario === d.usuario)) throw new ApiError(400, { usuario: ["Este usuario ya está en uso."] });
-      return esperar(Object.assign(buscar(db.usuarios, id), d));
+      const u = Object.assign(buscar(db.usuarios, id), d);
+      u.usuario = usuarioGenerado(u.nombre, u.documento) || u.usuario;
+      return esperar(u);
     },
     async restablecerClave(id) {
       buscar(db.usuarios, id);
@@ -123,14 +152,15 @@ export const mockApi: Api = {
 
   equipos: {
     listar: async () => esperar(db.equipos),
-    async crear(d) {
-      if (db.equipos.some((e) => e.codigo.toUpperCase() === d.codigo.toUpperCase())) throw new ApiError(400, { codigo: ["Ya existe un equipo con este código o placa."] });
-      const nuevo = { ...d, id: d.codigo.toUpperCase(), codigo: d.codigo.toUpperCase(), modificado: `${sesionActual || "Administrador"} · ${hoy()}` };
+    async crear({ numero, ...d }) {
+      const codigo = codigoEquipo(d.tipo, numero);
+      if (!codigo) throw new ApiError(400, { numero: ["Elige un número entre 1 y 999."] });
+      if (db.equipos.some((e) => e.codigo === codigo)) throw new ApiError(400, { numero: [`El código ${codigo} ya existe. Elige otro número.`] });
+      const nuevo = { ...d, id: codigo, codigo, modificado: `${sesionActual || "Administrador"} · ${hoy()}` };
       db.equipos.unshift(nuevo);
       return esperar(nuevo);
     },
     async actualizar(id, d) {
-      if (d.codigo && d.codigo.toUpperCase() !== id) throw new ApiError(400, { codigo: ["El código de un equipo no se puede cambiar."] });
       return esperar(Object.assign(buscar(db.equipos, id), d, { modificado: `${sesionActual || "Administrador"} · ${hoy()}` }));
     },
   },
@@ -139,15 +169,33 @@ export const mockApi: Api = {
     listar: async () => esperar(db.listas),
     async crear(tipo) {
       if (db.listas.some((l) => l.tipo === tipo)) throw new ApiError(400, { tipo: ["Este tipo de equipo ya tiene lista."] });
-      const nueva = { id: `CHK-${tipo.toUpperCase().replace(/[^A-Z0-9]+/g, "-")}`, tipo, version: 1, secciones: [{ titulo: "Sección 1", items: [{ texto: "" }] }] };
+      const nueva = { id: `CHK-${tipo.toUpperCase().replace(/[^A-Z0-9]+/g, "-")}`, tipo, nombre: `Lista de ${tipo.toLowerCase()}`, version: 1, secciones: [] };
       db.listas.push(nueva);
       return esperar(nueva);
     },
-    async actualizar(id, d) {
+    async actualizar(id, itemIds) {
       const l = buscar(db.listas, id);
-      l.secciones = structuredClone(d.secciones);
+      l.secciones = seccionesDe(itemIds);
       l.version += 1; // las inspecciones anteriores conservan la versión que respondieron
       return esperar(l);
+    },
+    async eliminar(id) {
+      const l = buscar(db.listas, id);
+      if (registros.inspecciones.some((i) => i.checkin && registros.checkins.some((c) => c.id === i.checkin && db.equipos.some((e) => e.codigo === c.codigoEquipo && e.tipo === l.tipo)))) {
+        throw new ApiError(400, { detail: ["No se puede eliminar porque tiene registros asociados."] });
+      }
+      db.listas = db.listas.filter((x) => x.id !== id);
+      await esperar(null);
+    },
+  },
+
+  banco: {
+    listar: async () => esperar(banco),
+    async crear(d) {
+      if (banco.some((b) => b.categoria.toLowerCase() === d.categoria.trim().toLowerCase() && b.texto.toLowerCase() === d.texto.trim().toLowerCase())) throw new ApiError(400, { texto: ["Ese ítem ya está en el banco."] });
+      const nuevo = { id: `ITM-${banco.length + 1}`, texto: d.texto.trim(), categoria: d.categoria.trim(), critico: d.critico };
+      banco.push(nuevo);
+      return esperar(nuevo);
     },
   },
 
@@ -158,7 +206,7 @@ export const mockApi: Api = {
     },
     checkins: async () => {
       const id = db.usuarios.find((u) => u.nombre === sesionActual)?.id;
-      return esperar(registros.checkins.filter((c) => c.operador === id).map(({ operador: _operador, ...c }) => c));
+      return esperar(registros.checkins.filter((c) => c.operador === id).map(({ operador: _operador, ...c }) => conInspeccion(c)));
     },
     async iniciarCheckin(codigo, horometroInicial) {
       const equipo = db.equipos.find((e) => e.codigo === codigo);
@@ -177,11 +225,12 @@ export const mockApi: Api = {
         iniciadoEn: new Date().toISOString(),
         finalizadoEn: null,
         listaId: lista?.id ?? null,
+        inspeccion: null,
       };
       registros.checkins.push({ ...checkin, operador });
       return esperar(checkin);
     },
-    async cerrarCheckin(id, horometroFinal) {
+    async cerrarCheckin(id, horometroFinal, _observacionGeneral) {
       const checkin = registros.checkins.find((c) => c.id === id);
       if (!checkin || checkin.finalizadoEn) throw new ApiError(400, { detail: ["El check-in no está abierto."] });
       const final = Number(horometroFinal);
@@ -190,7 +239,13 @@ export const mockApi: Api = {
       }
       checkin.horometroFinal = String(final);
       checkin.finalizadoEn = new Date().toISOString();
-      return esperar(checkin);
+      registros.inspecciones.forEach((i) => { if (i.checkin === id) i.pendiente = false; }); // se envía al cerrar
+      return esperar(conInspeccion(checkin));
+    },
+    async equipo(codigo) {
+      const e = db.equipos.find((x) => x.codigo === codigo);
+      if (!e) throw new ApiError(404, { detail: ["No encontrado."] });
+      return esperar(e);
     },
     async listaParaEquipo(codigo): Promise<ListaOperativa> {
       const equipo = db.equipos.find((e) => e.codigo === codigo);
@@ -224,7 +279,7 @@ export const mockApi: Api = {
       const criticos = new Set(lista.secciones.flatMap((s, si) => s.items.flatMap((item, ii) => item.critico ? [`${lista.id}-${si}-${ii}`] : [])));
       const esCritica = datos.respuestas.some((r) => criticos.has(r.item) && r.resultado === "does_not_comply");
       const resultado: ResultadoInspeccion = { id: ++siguienteRegistro, resultadoGlobal: esCritica ? "critical_failure" : "completed", esCritica };
-      registros.inspecciones.push({ ...resultado, equipo: datos.equipo, checkin: datos.checkin, respuestas: datos.respuestas.map((r) => r.item) });
+      registros.inspecciones.push({ ...resultado, equipo: datos.equipo, checkin: datos.checkin, respuestas: datos.respuestas.map((r) => r.item), pendiente: !!datos.pendiente });
       return esperar(resultado);
     },
     async registrarNovedad(datos) {

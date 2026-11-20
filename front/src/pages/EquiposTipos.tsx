@@ -2,7 +2,8 @@
 import { useEffect, useState } from "react";
 import { Cargando, Drawer, Field, Icon, Status, Tabs, Toast, btnGhost, btnPrimary, card, erroresDeFormulario, input, td, textoError, th, type Aviso, type Tone } from "../components/ui";
 import { api } from "../services/api";
-import { ESTADOS_EQUIPO, type Equipo, type EstadoEquipo, type ListaInspeccion, type TipoEquipo } from "../types";
+import { codigoEquipo, prefijoTipo } from "../services/codigos";
+import { ESTADOS_EQUIPO, LICENCIAS, type Equipo, type EstadoEquipo, type ListaInspeccion, type TipoEquipo } from "../types";
 
 const tonoEstado: Record<EstadoEquipo, Tone> = { Disponible: "ok", "En mantenimiento": "warn", "Fuera de servicio": "danger" };
 const horas = (h: string) => (!h ? "—" : /^\d+$/.test(h) ? `${h} h` : h);
@@ -22,11 +23,13 @@ export default function EquiposTipos() {
   </>;
 }
 
-type DatosEquipo = Omit<Equipo, "id" | "modificado">;
+// El código no se escribe: el backend lo arma con el prefijo del tipo y el número (CAR-020).
+type DatosEquipo = Omit<Equipo, "id" | "codigo" | "modificado"> & { numero: string };
 
 function Equipos({ equipos, setEquipos, tipos }: { equipos: Equipo[]; setEquipos: (e: Equipo[]) => void; tipos: TipoEquipo[] }) {
   const [filtro, setFiltro] = useState("Todos"); const [q, setQ] = useState("");
   const [form, setForm] = useState<{ id?: string; modificado?: string; data: DatosEquipo } | null>(null);
+  const nuevoCodigo = form && !form.id ? codigoEquipo(form.data.tipo, form.data.numero) : "";
   const [error, setError] = useState<Record<string, string>>({});
   const [guardando, setGuardando] = useState(false);
   const [aviso, setAviso] = useState<Aviso>(null);
@@ -35,23 +38,24 @@ function Equipos({ equipos, setEquipos, tipos }: { equipos: Equipo[]; setEquipos
 
   const abrir = (e?: Equipo) => {
     setError({});
-    if (e) { const { id, modificado, ...data } = e; setForm({ id, modificado, data }); }
-    else setForm({ data: { codigo: "", placa: "", tipo: activos[0]?.nombre ?? "", marca: "", serie: "", anio: "", horometro: "", estado: "Disponible" } });
+    if (e) { const { id, modificado, codigo: _codigo, ...data } = e; setForm({ id, modificado, data: { ...data, numero: "" } }); }
+    else { const tipo = activos[0]?.nombre ?? ""; setForm({ data: { numero: "", placa: "", tipo, marca: "", serie: "", anio: "", horometro: "", estado: "Disponible" } }); }
   };
   const set = (k: keyof DatosEquipo, v: string) => form && setForm({ ...form, data: { ...form.data, [k]: v } });
   const guardar = async () => {
-    if (!form) return; const d = { ...form.data, codigo: form.data.codigo.trim().toUpperCase() }; const e: Record<string, string> = {};
-    if (!d.codigo) e.codigo = "Escribe el código del equipo.";
+    if (!form) return; const { numero, tipo, ...d } = form.data; const e: Record<string, string> = {};
+    if (!form.id && !tipo) e.tipo = "Elige el tipo de equipo.";
+    else if (!form.id && prefijoTipo(tipo).length < 3) e.tipo = "El nombre del tipo necesita al menos 3 letras para armar el código.";
+    if (!form.id && !codigoEquipo(tipo, numero)) e.numero = "Escribe un número entre 1 y 999.";
     if (!d.marca.trim()) e.marca = "Escribe la marca o el modelo.";
-    if (!d.tipo) e.tipo = "Elige el tipo de equipo.";
     setError(e); if (Object.keys(e).length) return;
     setGuardando(true);
     try {
-      const x = form.id ? await api.equipos.actualizar(form.id, d) : await api.equipos.crear(d);
+      const x = form.id ? await api.equipos.actualizar(form.id, d) : await api.equipos.crear({ ...d, tipo, numero: Number(numero) });
       setEquipos(form.id ? equipos.map((y) => (y.id === x.id ? x : y)) : [x, ...equipos]);
       setAviso({ texto: form.id ? "Cambios guardados" : "Equipo registrado" }); setForm(null);
     } catch (err) {
-      const { campos, resto } = erroresDeFormulario(err, ["codigo", "placa", "tipo", "marca", "anio", "horometro"]);
+      const { campos, resto } = erroresDeFormulario(err, ["numero", "placa", "tipo", "marca", "anio", "horometro"]);
       setError(campos); if (resto) setAviso({ texto: resto, error: true });
     } finally { setGuardando(false); }
   };
@@ -80,12 +84,16 @@ function Equipos({ equipos, setEquipos, tipos }: { equipos: Equipo[]; setEquipos
       </table>
       {vistos.length === 0 && <p className="p-10 text-center text-sm font-semibold text-slate-400">No hay equipos que coincidan con la búsqueda.</p>}
     </article>
-    {form && <Drawer title={form.id ? `Editar ${form.data.codigo}` : "Registrar equipo"} subtitle={form.id ? "El código identifica al equipo y no se puede cambiar." : "El código y la placa no se pueden repetir."} onClose={() => setForm(null)} footer={<><button className={`${btnGhost} flex-1`} onClick={() => setForm(null)}>Cancelar</button><button disabled={guardando} className={`${btnPrimary} flex-1`} onClick={guardar}><Icon name="check" size={19} />{guardando ? "Guardando..." : "Guardar"}</button></>}>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Código *" error={error.codigo}><input disabled={!!form.id} className={`${input} w-full uppercase disabled:bg-slate-100 disabled:text-slate-500 ${error.codigo ? "border-red-500" : "border-slate-200"}`} value={form.data.codigo} onChange={(e) => set("codigo", e.target.value)} placeholder="Ej. CAR-10" /></Field>
-        <Field label="Placa" error={error.placa}><input className={`${input} w-full uppercase ${error.placa ? "border-red-500" : "border-slate-200"}`} value={form.data.placa} onChange={(e) => set("placa", e.target.value)} placeholder="Opcional" /></Field>
-      </div>
-      <Field label="Tipo de equipo *" error={error.tipo}><select className={`${input} w-full border-slate-200`} value={form.data.tipo} onChange={(e) => set("tipo", e.target.value)}>{activos.map((t) => <option key={t.id}>{t.nombre}</option>)}</select></Field>
+    {form && <Drawer title={form.id ? `Editar ${form.id}` : "Registrar equipo"} subtitle={form.id ? "El código y el tipo identifican al equipo y no se pueden cambiar." : "El código se arma solo con el tipo y el número."} onClose={() => setForm(null)} footer={<><button className={`${btnGhost} flex-1`} onClick={() => setForm(null)}>Cancelar</button><button disabled={guardando} className={`${btnPrimary} flex-1`} onClick={guardar}><Icon name="check" size={19} />{guardando ? "Guardando..." : "Guardar"}</button></>}>
+      {form.id ? <div className="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-4">
+        <div><p className="text-xs font-black uppercase tracking-wider text-slate-400">Código</p><p className="mt-1 font-mono text-lg font-black">{form.id}</p></div>
+        <div><p className="text-xs font-black uppercase tracking-wider text-slate-400">Tipo</p><p className="mt-1 font-black">{form.data.tipo}</p></div>
+      </div> : <>
+        <Field label="Tipo de equipo *" error={error.tipo}><select className={`${input} w-full border-slate-200`} value={form.data.tipo} onChange={(e) => set("tipo", e.target.value)}>{activos.map((t) => <option key={t.id}>{t.nombre}</option>)}</select></Field>
+        <Field label="Número *" error={error.numero}><span className={`flex items-stretch overflow-hidden rounded-xl border-2 focus-within:border-[#F5B800] ${error.numero ? "border-red-500" : "border-slate-200"}`}><span className="grid place-items-center bg-slate-100 px-4 font-mono text-sm font-black text-slate-500">{prefijoTipo(form.data.tipo) || "???"}-</span><input className="min-h-12 min-w-0 flex-1 px-4 text-sm font-bold outline-none" value={form.data.numero} inputMode="numeric" onChange={(e) => set("numero", e.target.value.replace(/\D/g, "").slice(0, 3))} placeholder="1 a 999" /></span></Field>
+        <div className="flex items-center justify-between rounded-xl bg-[#F5B800]/10 p-4"><span className="text-sm font-bold text-slate-600">Código del equipo</span><span className="font-mono text-lg font-black text-[#684C00]">{nuevoCodigo || "—"}</span></div>
+      </>}
+      <Field label="Placa" error={error.placa}><input className={`${input} w-full uppercase ${error.placa ? "border-red-500" : "border-slate-200"}`} value={form.data.placa} onChange={(e) => set("placa", e.target.value)} placeholder="Opcional" /></Field>
       <Field label="Marca / modelo *" error={error.marca}><input className={`${input} w-full ${error.marca ? "border-red-500" : "border-slate-200"}`} value={form.data.marca} onChange={(e) => set("marca", e.target.value)} placeholder="Ej. Caterpillar 950H" /></Field>
       <div className="grid grid-cols-2 gap-3"><Field label="No. de serie"><input className={`${input} w-full border-slate-200`} value={form.data.serie} onChange={(e) => set("serie", e.target.value)} placeholder="Opcional" /></Field><Field label="Año" error={error.anio}><input className={`${input} w-full border-slate-200`} value={form.data.anio} inputMode="numeric" onChange={(e) => set("anio", e.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="Ej. 2014" /></Field></div>
       <Field label="Horómetro actual" error={error.horometro}><span className="relative block"><input className={`${input} w-full border-slate-200 pr-12`} value={form.data.horometro} inputMode="numeric" onChange={(e) => set("horometro", e.target.value)} placeholder="Horas" /><span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">h</span></span></Field>
@@ -118,19 +126,21 @@ function Tipos({ tipos, equipos, listas, recargar }: { tipos: TipoEquipo[]; equi
       {tipos.map((t) => { const n = equipos.filter((e) => e.tipo === t.nombre).length; const lista = listas.find((l) => l.tipo === t.nombre); return <article key={t.id} className={`${card} p-5 ${t.activo ? "" : "opacity-60"}`}>
         <div className="flex items-start justify-between"><span className="grid size-12 place-items-center rounded-xl bg-[#F5B800]/15 text-[#8A6500]"><Icon name="equipment" /></span><Status type={t.activo ? "ok" : "neutral"}>{t.activo ? "Activo" : "Inactivo"}</Status></div>
         <h3 className="mt-4 text-lg font-black">{t.nombre}</h3><p className="mt-1 min-h-10 text-sm text-slate-500">{t.descripcion}</p>
-        <div className="mt-4 space-y-2 rounded-xl bg-slate-50 p-3 text-sm"><div className="flex justify-between"><span className="font-semibold text-slate-500">Equipos asociados</span><span className="font-black">{n}</span></div><div className="flex justify-between"><span className="font-semibold text-slate-500">Lista de inspección</span><span className="font-black text-[#8A6500]">{lista ? `${lista.secciones.reduce((k, s) => k + s.items.length, 0)} ítems` : "Sin lista"}</span></div></div>
+        <div className="mt-4 space-y-2 rounded-xl bg-slate-50 p-3 text-sm"><div className="flex justify-between"><span className="font-semibold text-slate-500">Equipos asociados</span><span className="font-black">{n}</span></div>{t.licencia && <div className="flex justify-between"><span className="font-semibold text-slate-500">Licencia requerida</span><span className="font-black">{t.licencia}</span></div>}<div className="flex justify-between"><span className="font-semibold text-slate-500">Lista de inspección</span><span className="font-black text-[#8A6500]">{lista ? `${lista.secciones.reduce((k, s) => k + s.items.length, 0)} ítems` : "Sin lista"}</span></div></div>
         <div className="mt-4 flex gap-2">
-          <button onClick={() => { setError(""); setForm({ id: t.id, data: { nombre: t.nombre, descripcion: t.descripcion, activo: t.activo } }); }} className={`${btnGhost} h-11 flex-1`}>Editar</button>
+          <button onClick={() => { setError(""); setForm({ id: t.id, data: { nombre: t.nombre, descripcion: t.descripcion, activo: t.activo, licencia: t.licencia } }); }} className={`${btnGhost} h-11 flex-1`}>Editar</button>
           <button onClick={() => accion(() => api.tipos.actualizar(t.id, { activo: !t.activo }), t.activo ? "Tipo desactivado" : "Tipo activado")} className="h-11 flex-1 rounded-xl text-sm font-black text-slate-600 hover:bg-slate-100">{t.activo ? "Desactivar" : "Activar"}</button>
           <button disabled={n > 0} title={n > 0 ? `No se puede eliminar: tiene ${n} equipos asociados` : "Eliminar"} onClick={() => accion(() => api.tipos.eliminar(t.id), "Tipo eliminado")} className="grid size-11 place-items-center rounded-xl text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"><Icon name="trash" size={19} /></button>
         </div>
         {n > 0 && <p className="mt-3 flex items-center gap-1.5 text-xs font-semibold text-slate-400"><Icon name="lock" size={14} />No se puede eliminar mientras tenga equipos.</p>}
       </article>; })}
-      <button onClick={() => { setError(""); setForm({ data: { nombre: "", descripcion: "", activo: true } }); }} className="grid min-h-40 place-items-center rounded-2xl border-2 border-dashed border-slate-300 text-slate-500 hover:border-[#F5B800] hover:text-[#8A6500] sm:min-h-72"><span className="text-center"><span className="mx-auto grid size-12 place-items-center rounded-full bg-slate-100"><Icon name="plus" /></span><span className="mt-3 block text-sm font-black">Nuevo tipo de equipo</span></span></button>
+      <button onClick={() => { setError(""); setForm({ data: { nombre: "", descripcion: "", activo: true, licencia: "" } }); }} className="grid min-h-40 place-items-center rounded-2xl border-2 border-dashed border-slate-300 text-slate-500 hover:border-[#F5B800] hover:text-[#8A6500] sm:min-h-72"><span className="text-center"><span className="mx-auto grid size-12 place-items-center rounded-full bg-slate-100"><Icon name="plus" /></span><span className="mt-3 block text-sm font-black">Nuevo tipo de equipo</span></span></button>
     </div>
     {form && <Drawer title={form.id ? "Editar tipo" : "Nuevo tipo de equipo"} onClose={() => setForm(null)} footer={<><button className={`${btnGhost} flex-1`} onClick={() => setForm(null)}>Cancelar</button><button className={`${btnPrimary} flex-1`} onClick={guardar}><Icon name="check" size={19} />Guardar</button></>}>
       <Field label="Nombre *" error={error}><input className={`${input} w-full ${error ? "border-red-500" : "border-slate-200"}`} value={form.data.nombre} onChange={(e) => setForm({ ...form, data: { ...form.data, nombre: e.target.value } })} placeholder="Ej. Compactadoras" /></Field>
       <Field label="Descripción"><textarea className={`${input} min-h-24 w-full resize-none border-slate-200 py-3`} value={form.data.descripcion} onChange={(e) => setForm({ ...form, data: { ...form.data, descripcion: e.target.value } })} placeholder="Qué equipos incluye" /></Field>
+      <Field label="Licencia requerida"><div className="grid grid-cols-4 gap-2">{["", ...LICENCIAS].map((l) => <button key={l || "ninguna"} type="button" onClick={() => setForm({ ...form, data: { ...form.data, licencia: l } })} className={`min-h-12 rounded-xl border-2 text-xs font-black ${form.data.licencia === l ? "border-[#F5B800] bg-[#F5B800]/15 text-[#684C00]" : "border-slate-200 text-slate-600"}`}>{l || "Ninguna"}</button>)}</div><p className="mt-1.5 text-xs font-semibold text-slate-400">Solo los operarios con esta licencia podrán usar los equipos de este tipo.</p></Field>
+      {!form.id && form.data.nombre.trim() && <p className="rounded-xl bg-slate-50 p-3 text-xs font-semibold text-slate-500">Los equipos de este tipo tendrán códigos como <strong className="font-mono text-slate-700">{codigoEquipo(form.data.nombre, 1) || "— (necesita al menos 3 letras)"}</strong>.</p>}
     </Drawer>}
     {aviso && <Toast text={aviso.texto} error={aviso.error} onClose={() => setAviso(null)} />}
   </>;

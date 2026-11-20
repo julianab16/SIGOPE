@@ -81,13 +81,15 @@ Todas las rutas van bajo `{VITE_API_URL}/api`. Las peticiones envían `Authoriza
 | Guardar permisos de un rol | `PUT /accounts/roles/{id}/permissions/` |
 | Listar / crear tipos | `GET`, `POST /catalog/equipment-types/` |
 | Editar / activar / eliminar tipo | `PATCH`, `DELETE /catalog/equipment-types/{id}/` |
-| Listar / registrar equipos | `GET`, `POST /catalog/equipments/` |
+| Listar / registrar equipos (se envía `number`; el código lo arma el backend) | `GET`, `POST /catalog/equipments/` |
 | Editar equipo | `PATCH /catalog/equipments/{codigo}/` |
 | Listar / crear listas | `GET`, `POST /catalog/checklists/` |
-| Actualizar lista (nueva versión) | `PATCH /catalog/checklists/{id}/` |
+| Actualizar lista (nueva versión, con `item_orders` del banco) | `PATCH /catalog/checklists/{id}/` |
+| Banco de ítems | `GET`, `POST /catalog/items/` |
+| Secciones del banco | `GET`, `POST /catalog/item-categories/` |
 | Consultar equipos disponibles | `GET /catalog/equipments/?status=usable` |
 | Iniciar / consultar check-ins | `POST`, `GET /inspections/checkins/` |
-| Cerrar check-in con horómetro final | `POST /inspections/checkins/{id}/close/` |
+| Cerrar check-in con horómetro final (envía la inspección pendiente) | `POST /inspections/checkins/{id}/close/` |
 | Consultar lista vigente y registrar inspección | `GET /catalog/checklists/`, `POST /inspections/records/` |
 | Registrar novedad / incidente | `POST /news/`, `POST /incidents/` |
 | Adjuntar evidencia a una inspección | `POST /inspections/evidence/` (`multipart/form-data`) |
@@ -97,8 +99,12 @@ El detalle de cada endpoint está en `../back/README.md` y en Swagger (`http://l
 
 ### Flujos de operación del operario
 
-- Consulta equipos disponibles por código, placa o modelo, y filtra por tipo. Un equipo con check-in abierto no puede seleccionarse de nuevo.
-- Inicia el check-in con la lectura inicial del horómetro; la fecha y hora de inicio provienen del backend. Completa la lista vigente del tipo de equipo y cierra el uso con una lectura final igual o mayor a la inicial.
+Pensado para el celular y para personas poco acostumbradas a la tecnología (botones y letras grandes, un paso por pantalla):
+
+1. **Elige el vehículo.** Lo primero que ve son los vehículos disponibles. Arriba, en **"Vehículo en uso"**, aparece el que ya empezó a revisar y no ha terminado (por ejemplo, si se salió de la aplicación). Puede filtrar por tipo o buscar por código o placa.
+2. **Panel del vehículo.** Muestra sus datos y los horómetros **inicial y final juntos**. Escribe el inicial y toca **"Revisar vehículo · Iniciar inspección"**: se registra el uso (el vehículo deja de estar disponible para otros) y se abre la lista.
+3. **Inspección.** Cada ítem tiene Cumple / No cumple / No aplica. Con **No cumple** debe describir qué pasó; si el ítem es crítico se le advierte que no opere el vehículo. **"Finalizar inspección"** la guarda en el servidor como **pendiente de envío**: todavía no la ven los supervisores.
+4. **Fin de la jornada.** Vuelve al panel del vehículo, escribe el **horómetro final** (igual o mayor al inicial; si no usó el vehículo, el mismo número del inicial) y, si quiere, la **observación final** (por ejemplo, que no se usó por las fallas encontradas). Toca **"Enviar inspección"**: se cierra el uso y la inspección se envía con esa observación.
 - Cada ítem de inspección requiere una respuesta: **Cumple**, **No cumple** o **No aplica**. Se pueden añadir observaciones por ítem y una observación general; el resultado crítico se muestra según la respuesta del backend.
 - Registra novedades con los tipos definidos por la API e incidentes con fecha/hora del evento y severidad. La etiqueta **Moderado** se envía como `media`.
 - Al registrar una novedad o un incidente, se pueden seleccionar evidencias opcionales en el mismo formulario; se suben al guardar el reporte. También se pueden adjuntar hasta cinco archivos JPG/JPEG, PNG o PDF, de máximo 5 MB cada uno, a inspecciones. Las imágenes grandes se comprimen en el navegador; los PDF que superen el límite se rechazan. La respuesta permite abrir las evidencias subidas.
@@ -107,8 +113,10 @@ El detalle de cada endpoint está en `../back/README.md` y en Swagger (`http://l
 
 El front también las valida, pero la fuente de verdad es el backend:
 
-- No se repiten el **documento** ni el **usuario** de un usuario.
-- No se repite el **código** ni la **placa** de un equipo, y el código no se puede cambiar.
+- No se repite el **documento** de un usuario. El **usuario** para iniciar sesión no se escribe: el backend lo genera con la inicial del nombre, la cédula y la inicial del último apellido (Carlos Rodríguez, 16742859 → `c16742859r`). Solo cambia si se edita el nombre o la cédula.
+- El **código** de un equipo no se escribe: se elige el tipo y un número de 1 a 999 y el backend lo arma con las 3 primeras letras del tipo (`CAR-020`). El código y el tipo no se pueden cambiar después; la placa no se repite.
+- Las **listas de inspección** no se escriben ítem por ítem. Con "+ Agregar sección" se elige una de las secciones que hay en la base (Aire, Balde, Batería…); al abrirla aparecen todos sus ítems como opciones y se marcan los que se revisan. Si falta una sección o un ítem, se crea desde la misma pantalla y queda disponible para todas las listas.
+- Los usuarios tienen **licencias** (B1, C1, C2) y cada tipo de equipo puede exigir una; el operario solo puede hacer check-in en equipos cuya licencia tenga.
 - No se repite el **nombre** de un tipo de equipo ni de un rol.
 - No se puede **eliminar** un tipo que tenga equipos.
 - Cada tipo de equipo tiene **una sola** lista de inspección.

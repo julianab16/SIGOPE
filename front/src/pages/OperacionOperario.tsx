@@ -1,248 +1,256 @@
+// Operación del operario, pensada para usarse fácil desde el celular:
+//   1. Elige el vehículo (primero ve los disponibles y el que ya tiene en uso).
+//   2. Panel del vehículo: datos, horómetro inicial y final juntos.
+//      "Revisar vehículo" registra el uso y abre la inspección.
+//   3. Inspección: Cumple / No cumple / No aplica. "No cumple" pide describir qué pasó.
+//      "Finalizar inspección" la guarda en el servidor SIN enviarla.
+//   4. Al terminar la jornada, en el panel del vehículo escribe el horómetro final y, si
+//      quiere, la observación final (general_notes); "Enviar inspección" cierra el uso y la envía.
 import { useEffect, useMemo, useState } from "react";
 import CargaEvidencias from "../components/CargaEvidencias";
-import { Cargando, Field, Icon, Status, btnGhost, btnPrimary, card, input, textoError } from "../components/ui";
+import { Cargando, Icon, Status, btnGhost, btnPrimary, card, input, textoError } from "../components/ui";
 import { api } from "../services/api";
-import type { CheckIn, Equipo, ListaOperativa, ResultadoInspeccion } from "../types";
+import type { CheckIn, Equipo, ListaOperativa } from "../types";
 
 type Respuesta = "complies" | "does_not_comply" | "not_applicable";
-const RESPUESTAS: { valor: Respuesta; etiqueta: string }[] = [
-  { valor: "complies", etiqueta: "Cumple" },
-  { valor: "does_not_comply", etiqueta: "No cumple" },
-  { valor: "not_applicable", etiqueta: "No aplica" },
+const RESPUESTAS: { valor: Respuesta; etiqueta: string; activo: string }[] = [
+  { valor: "complies", etiqueta: "Cumple", activo: "border-emerald-600 bg-emerald-600 text-white" },
+  { valor: "does_not_comply", etiqueta: "No cumple", activo: "border-red-600 bg-red-600 text-white" },
+  { valor: "not_applicable", etiqueta: "No aplica", activo: "border-slate-500 bg-slate-500 text-white" },
 ];
 
-const fecha = (valor: string) => new Date(valor).toLocaleString("es-CO", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
+type Borrador = { respuestas: Record<string, Respuesta>; notas: Record<string, string> };
+const borradorVacio = (): Borrador => ({ respuestas: {}, notas: {} });
+
+const hora = (valor: string) => new Date(valor).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" });
+const lectura = (texto: string) => (texto.trim() === "" ? NaN : Number(texto.replace(",", ".")));
+const horas = (valor: string) => String(Number(valor)); // "1690.00" → "1690"
 
 export default function OperacionOperario({ puedeReportar = false }: { puedeReportar?: boolean }) {
   const [equipos, setEquipos] = useState<Equipo[] | null>(null);
-  const [checkins, setCheckins] = useState<CheckIn[] | null>(null);
-  const [seleccionado, setSeleccionado] = useState("");
-  const [tipo, setTipo] = useState("Todos");
-  const [busqueda, setBusqueda] = useState("");
-  const [horometroInicial, setHorometroInicial] = useState("");
-  const [checkinActivo, setCheckinActivo] = useState<CheckIn | null>(null);
+  const [usos, setUsos] = useState<CheckIn[]>([]);
+  const [vista, setVista] = useState<"equipos" | "vehiculo" | "inspeccion" | "enviada">("equipos");
+  const [equipo, setEquipo] = useState<Equipo | null>(null);
+  const [uso, setUso] = useState<CheckIn | null>(null); // uso abierto del vehículo elegido
   const [lista, setLista] = useState<ListaOperativa | null>(null);
-  const [inspeccion, setInspeccion] = useState<ResultadoInspeccion | null>(null);
-  const [respuestas, setRespuestas] = useState<Record<string, Respuesta>>({});
-  const [observaciones, setObservaciones] = useState<Record<string, string>>({});
-  const [observacionGeneral, setObservacionGeneral] = useState("");
-  const [horometroFinal, setHorometroFinal] = useState("");
+  const [borrador, setBorrador] = useState<Borrador>(borradorVacio);
+  const [inicial, setInicial] = useState("");
+  const [final, setFinal] = useState("");
+  const [observacion, setObservacion] = useState(""); // observación final: se escribe en el panel y se envía con el horómetro final
   const [cargando, setCargando] = useState(true);
   const [guardando, setGuardando] = useState(false);
-  const [cargandoLista, setCargandoLista] = useState(false);
   const [error, setError] = useState("");
-  const [aviso, setAviso] = useState("");
 
   const recargar = async () => {
-    const [disponibles, activos] = await Promise.all([
-      api.operacion.equiposDisponibles(),
-      api.operacion.checkins(),
-    ]);
+    const [disponibles, todos] = await Promise.all([api.operacion.equiposDisponibles(), api.operacion.checkins()]);
     setEquipos(disponibles);
-    setCheckins(activos);
+    setUsos(todos.filter((c) => !c.finalizadoEn));
+  };
+  useEffect(() => { recargar().catch((e) => setError(textoError(e))).finally(() => setCargando(false)); }, []);
+
+  const volverAEquipos = async () => {
+    setVista("equipos"); setEquipo(null); setUso(null); setLista(null); setError(""); setInicial(""); setFinal(""); setObservacion("");
+    window.scrollTo({ top: 0 });
+    await recargar().catch((e) => setError(textoError(e)));
+  };
+  const abrirVehiculo = async (e: Equipo | null, abierto: CheckIn | null) => {
+    setError(""); setFinal(""); setObservacion(""); setLista(null); setBorrador(borradorVacio());
+    setUso(abierto); setInicial(abierto ? horas(abierto.horometroInicial) : "");
+    setVista("vehiculo"); window.scrollTo({ top: 0 });
+    if (e) setEquipo(e);
+    else if (abierto) { setEquipo(null); setEquipo(await api.operacion.equipo(abierto.codigoEquipo).catch(() => null)); }
   };
 
-  useEffect(() => {
-    recargar().catch((e) => setError(textoError(e))).finally(() => setCargando(false));
-  }, []);
-
-  const tipos = useMemo(() => [...new Set((equipos ?? []).map((e) => e.tipo))].sort(), [equipos]);
-  const visibles = (equipos ?? []).filter((e) =>
-    (tipo === "Todos" || e.tipo === tipo)
-    && `${e.codigo} ${e.placa} ${e.marca}`.toLowerCase().includes(busqueda.toLowerCase()),
-  );
-  const abiertos = (checkins ?? []).filter((c) => !c.finalizadoEn);
-
-  const abrirCheckin = async (checkin: CheckIn) => {
-    setCheckinActivo(checkin);
-    setLista(null);
-    setInspeccion(null);
-    setRespuestas({});
-    setObservaciones({});
-    setObservacionGeneral("");
-    setHorometroFinal("");
-    setError("");
-    setAviso("");
-    setCargandoLista(true);
+  // Paso 2 → 3: registra el uso (con el horómetro inicial) y abre la lista de inspección.
+  const iniciarInspeccion = async () => {
+    const codigo = uso?.codigoEquipo ?? equipo?.codigo;
+    if (!codigo) return;
+    setError(""); setGuardando(true);
     try {
-      const [listaEquipo, inspeccionExistente] = await Promise.all([
-        api.operacion.listaParaEquipo(checkin.codigoEquipo),
-        api.operacion.inspeccionParaCheckin(checkin),
-      ]);
-      setLista(listaEquipo);
-      setInspeccion(inspeccionExistente);
-    } catch (e) {
-      setError(textoError(e));
-    } finally {
-      setCargandoLista(false);
-    }
+      let actual = uso;
+      if (!actual) {
+        const valor = lectura(inicial);
+        if (!Number.isFinite(valor) || valor < 0) { setError("Escribe el horómetro inicial: el número que marca el vehículo ahora."); return; }
+        actual = await api.operacion.iniciarCheckin(codigo, valor);
+        setUso(actual);
+      }
+      setLista(await api.operacion.listaParaEquipo(codigo));
+      setVista("inspeccion"); window.scrollTo({ top: 0 });
+    } catch (e) { setError(textoError(e)); }
+    finally { setGuardando(false); }
   };
 
-  const iniciar = async () => {
-    const equipo = equipos?.find((e) => e.codigo === seleccionado);
-    const lectura = Number(horometroInicial);
-    if (!equipo) return setError("Selecciona un equipo disponible.");
-    if (!horometroInicial || !Number.isFinite(lectura) || lectura < 0) return setError("Ingresa una lectura inicial válida.");
-    setGuardando(true);
-    setError("");
-    try {
-      const nuevo = await api.operacion.iniciarCheckin(equipo.codigo, lectura);
-      setCheckins((actuales) => [...(actuales ?? []), nuevo]);
-      setSeleccionado("");
-      setHorometroInicial("");
-      await recargar();
-      await abrirCheckin(nuevo);
-      setAviso("Check-in iniciado. Completa la inspección antes de operar.");
-    } catch (e) {
-      setError(textoError(e));
-    } finally {
-      setGuardando(false);
-    }
-  };
-
-  const guardarInspeccion = async () => {
-    if (!checkinActivo || !lista) return;
+  // Paso 3 → 2: guarda la inspección en el servidor como pendiente de envío.
+  const finalizarInspeccion = async () => {
+    if (!uso || !lista) return;
     const items = lista.secciones.flatMap((s) => s.items);
-    if (items.some((item) => !respuestas[item.id])) return setError("Responde todos los ítems antes de enviar la inspección.");
-    setGuardando(true);
-    setError("");
+    const sinResponder = items.find((i) => !borrador.respuestas[i.id]);
+    const sinDescripcion = items.find((i) => borrador.respuestas[i.id] === "does_not_comply" && !borrador.notas[i.id]?.trim());
+    const pendiente = sinResponder ?? sinDescripcion;
+    if (pendiente) {
+      setError(sinResponder ? `Falta responder: "${sinResponder.texto}".` : `Describe qué pasó con "${sinDescripcion!.texto}".`);
+      document.getElementById(`item-${pendiente.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    setError(""); setGuardando(true);
     try {
       const resultado = await api.operacion.registrarInspeccion({
-        equipo: checkinActivo.codigoEquipo,
-        lista: lista.id,
-        checkin: checkinActivo.id,
-        observacionGeneral,
-        respuestas: items.map((item) => ({
-          item: item.id,
-          resultado: respuestas[item.id],
-          observacion: observaciones[item.id] ?? "",
-        })),
+        equipo: uso.codigoEquipo, lista: lista.id, checkin: uso.id, pendiente: true,
+        observacionGeneral: "", // la observación final se escribe en el panel del vehículo al enviar
+        respuestas: items.map((i) => ({ item: i.id, resultado: borrador.respuestas[i.id], observacion: borrador.respuestas[i.id] === "does_not_comply" ? borrador.notas[i.id].trim() : "" })),
       });
-      setInspeccion(resultado);
-      setAviso("Inspección registrada.");
-    } catch (e) {
-      setError(textoError(e));
-    } finally {
-      setGuardando(false);
-    }
+      setUso({ ...uso, inspeccion: { ...resultado, pendiente: true } });
+      setVista("vehiculo"); window.scrollTo({ top: 0 });
+    } catch (e) { setError(textoError(e)); }
+    finally { setGuardando(false); }
   };
 
-  const cerrarCheckin = async () => {
-    if (!checkinActivo) return;
-    const lectura = Number(horometroFinal);
-    if (!horometroFinal || !Number.isFinite(lectura) || lectura < Number(checkinActivo.horometroInicial)) {
-      return setError("La lectura final debe ser igual o mayor que la lectura inicial.");
-    }
-    setGuardando(true);
-    setError("");
-    try {
-      const cerrado = await api.operacion.cerrarCheckin(checkinActivo.id, lectura);
-      setCheckins((actuales) => (actuales ?? []).map((c) => c.id === cerrado.id ? cerrado : c));
-      setCheckinActivo(null);
-      setLista(null);
-      setInspeccion(null);
-      await recargar();
-      setAviso("Uso del equipo finalizado.");
-    } catch (e) {
-      setError(textoError(e));
-    } finally {
-      setGuardando(false);
-    }
-  };
-
-  const reportar = (tipo: "novedad" | "incidente") => {
-    if (!checkinActivo) return;
-    location.hash = `reportes-operario?equipo=${encodeURIComponent(checkinActivo.codigoEquipo)}&tipo=${tipo}`;
+  // Paso 4: horómetro final + envío.
+  const enviar = async () => {
+    if (!uso) return;
+    const valor = lectura(final);
+    if (!Number.isFinite(valor)) return setError("Escribe el horómetro final: el número que marca el vehículo al terminar.");
+    if (valor < Number(uso.horometroInicial)) return setError(`El horómetro final no puede ser menor que el inicial (${horas(uso.horometroInicial)}).`);
+    setError(""); setGuardando(true);
+    try { await api.operacion.cerrarCheckin(uso.id, valor, observacion.trim()); setVista("enviada"); window.scrollTo({ top: 0 }); }
+    catch (e) { setError(textoError(e)); }
+    finally { setGuardando(false); }
   };
 
   if (cargando) return <Cargando />;
+  const aviso = error && <p role="alert" className="mb-4 flex gap-3 rounded-xl bg-red-50 p-4 text-base font-bold text-red-700"><Icon name="warning" className="mt-0.5 shrink-0" />{error}</p>;
+
+  if (vista === "enviada") return <div className="mx-auto max-w-xl">
+    <section className={`${card} p-6 text-center sm:p-10`}>
+      <span className="mx-auto grid size-16 place-items-center rounded-full bg-emerald-100 text-emerald-700"><Icon name="check" size={32} /></span>
+      <h2 className="mt-4 text-2xl font-black">Inspección enviada</h2>
+      <p className="mt-2 text-base text-slate-600">Se registró el horómetro final de {uso?.codigoEquipo} y se envió la inspección. ¡Gracias!</p>
+      <button onClick={volverAEquipos} className={`${btnPrimary} mt-6 h-14 w-full text-base`}>Volver a los vehículos</button>
+    </section>
+  </div>;
+
+  if (vista === "inspeccion" && lista && uso) return <Inspeccion lista={lista} codigo={uso.codigoEquipo} borrador={borrador} setBorrador={setBorrador} guardando={guardando} aviso={aviso}
+    onVolver={() => { setError(""); setVista("vehiculo"); window.scrollTo({ top: 0 }); }} onFinalizar={finalizarInspeccion} />;
+
+  if (vista === "vehiculo") {
+    const codigo = uso?.codigoEquipo ?? equipo?.codigo ?? "";
+    const insp = uso?.inspeccion ?? null;
+    return <div className="mx-auto max-w-3xl">
+      <button onClick={volverAEquipos} className="mb-4 flex min-h-12 items-center gap-2 rounded-xl px-2 text-base font-black text-[#8A6500] hover:bg-[#F5B800]/10"><span className="rotate-180"><Icon name="arrow" size={20} /></span>Volver a los vehículos</button>
+      <section className={`${card} overflow-hidden`}>
+        <div className="flex items-start gap-4 border-b border-slate-200 p-5 sm:p-6">
+          <span className="grid size-14 shrink-0 place-items-center rounded-2xl bg-[#F5B800]/20 text-[#8A6500]"><Icon name="equipment" size={28} /></span>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-3xl font-black">{codigo}</h2>
+            <p className="mt-1 text-base font-bold text-slate-600">{equipo ? `${equipo.tipo} · ${equipo.marca}` : "Cargando datos…"}</p>
+            {equipo && <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-sm font-semibold text-slate-500">{equipo.placa && <span>Placa {equipo.placa}</span>}{equipo.anio && <span>Año {equipo.anio}</span>}{equipo.serie && <span>Serie {equipo.serie}</span>}</div>}
+          </div>
+          {uso ? <Status type="warn">En uso</Status> : <Status type="ok">Disponible</Status>}
+        </div>
+
+        <div className="grid gap-4 p-5 sm:grid-cols-2 sm:p-6">
+          <Horometro titulo="Horómetro inicial" ayuda={uso ? `Registrado ${hora(uso.iniciadoEn)}` : equipo?.horometro ? `Última lectura conocida: ${equipo.horometro} h` : "El número que marca el vehículo ahora"}
+            valor={inicial} onCambio={setInicial} bloqueado={!!uso} />
+          <Horometro titulo="Horómetro final" ayuda={insp ? "Escríbelo al terminar la jornada" : "Se llena al terminar la jornada, después de la inspección"}
+            valor={final} onCambio={setFinal} bloqueado={!insp} />
+        </div>
+
+        <div className="border-t border-slate-200 bg-slate-50 p-5 sm:p-6">
+          {!insp ? <>
+            {aviso}
+            <button disabled={guardando} onClick={iniciarInspeccion} className={`${btnPrimary} h-16 w-full text-lg`}><Icon name="clipboard" size={22} />{guardando ? "Abriendo…" : "Revisar vehículo · Iniciar inspección"}</button>
+          </> : <>
+            <div className={`rounded-xl p-4 ${insp.esCritica ? "bg-red-50 text-red-800" : "bg-emerald-50 text-emerald-800"}`}>
+              <p className="flex items-center gap-2 text-lg font-black"><Icon name={insp.esCritica ? "warning" : "check"} />Inspección terminada</p>
+              <p className="mt-1 text-base font-semibold">{insp.esCritica ? "Hay ítems críticos que NO cumplen. No operes el vehículo y avisa al jefe de taller." : "Está guardada. Se enviará cuando escribas el horómetro final."}</p>
+              {insp.esCritica && <p className="mt-1 text-sm font-semibold">La inspección quedará guardada y se enviará con el horómetro final.</p>}
+            </div>
+            <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4"><p className="text-sm font-black">Fotos o documentos (opcional)</p><CargaEvidencias key={`inspection-${insp.id}`} tipo="inspection" idRegistro={insp.id} /></div>
+            <label className="mt-4 block rounded-xl border border-slate-200 bg-white p-4">
+              <span className="block text-base font-black">Observación final <span className="font-semibold text-slate-400">(opcional)</span></span>
+              <textarea value={observacion} onChange={(e) => setObservacion(e.target.value)} className={`${input} mt-2 min-h-24 w-full resize-y border-slate-200 py-3 text-base`} placeholder="Ej. No se usó el vehículo por las fallas encontradas; el horómetro final es igual al inicial" />
+            </label>
+            {aviso}
+            <button disabled={guardando || !final.trim()} onClick={enviar} className={`${btnPrimary} mt-4 h-16 w-full text-lg`}><Icon name="arrow" size={22} />{guardando ? "Enviando…" : "Enviar inspección"}</button>
+            {!final.trim() && <p className="mt-2 text-center text-sm font-semibold text-slate-500">Escribe el horómetro final para poder enviar.</p>}
+          </>}
+          {puedeReportar && uso && <div className="mt-5 grid gap-2 border-t border-slate-200 pt-4 sm:grid-cols-2">
+            <button onClick={() => { location.hash = `reportes-operario?equipo=${encodeURIComponent(uso.codigoEquipo)}&tipo=novedad`; }} className={btnGhost}>Reportar una novedad</button>
+            <button onClick={() => { location.hash = `reportes-operario?equipo=${encodeURIComponent(uso.codigoEquipo)}&tipo=incidente`; }} className={btnGhost}>Reportar un incidente</button>
+          </div>}
+        </div>
+      </section>
+    </div>;
+  }
+
+  return <ElegirVehiculo equipos={equipos ?? []} usos={usos} aviso={aviso} onElegir={(e) => void abrirVehiculo(e, null)} onContinuar={(c) => void abrirVehiculo(null, c)} />;
+}
+
+function Horometro({ titulo, ayuda, valor, onCambio, bloqueado }: { titulo: string; ayuda: string; valor: string; onCambio: (v: string) => void; bloqueado: boolean }) {
+  return <label className={`block rounded-2xl border-2 p-4 ${bloqueado ? "border-slate-200 bg-slate-50" : "border-[#F5B800] bg-white"}`}>
+    <span className="block text-base font-black">{titulo}</span>
+    <span className="mt-2 flex items-center gap-2"><input type="text" inputMode="decimal" disabled={bloqueado} value={valor} onChange={(e) => onCambio(e.target.value.replace(/[^\d.,]/g, ""))} placeholder={bloqueado ? "—" : "0"} className={`${input} min-h-14 w-full border-slate-200 text-2xl disabled:bg-slate-100 disabled:text-slate-500`} /><span className="text-lg font-black text-slate-400">h</span></span>
+    <span className="mt-2 block text-sm font-semibold text-slate-500">{ayuda}</span>
+  </label>;
+}
+
+function ElegirVehiculo({ equipos, usos, aviso, onElegir, onContinuar }: { equipos: Equipo[]; usos: CheckIn[]; aviso: React.ReactNode; onElegir: (e: Equipo) => void; onContinuar: (c: CheckIn) => void }) {
+  const [tipo, setTipo] = useState("Todos");
+  const [busqueda, setBusqueda] = useState("");
+  const tipos = useMemo(() => [...new Set(equipos.map((e) => e.tipo))].sort(), [equipos]);
+  const visibles = equipos.filter((e) => (tipo === "Todos" || e.tipo === tipo) && `${e.codigo} ${e.placa} ${e.marca}`.toLowerCase().includes(busqueda.toLowerCase()));
 
   return <>
-    <div className="mb-6">
-      <p className="text-xs font-black uppercase tracking-wider text-[#8A6500]">Operación</p>
-      <h2 className="mt-1 text-xl font-black sm:text-2xl">Equipos e inspección</h2>
-      <p className="mt-1 text-sm text-slate-500">Selecciona un equipo disponible, registra su uso y completa la inspección.</p>
-    </div>
-
-    {error && <p role="alert" className="mb-4 rounded-xl bg-red-50 p-4 text-sm font-bold text-red-700">{error}</p>}
-    {aviso && <p role="status" className="mb-4 rounded-xl bg-emerald-50 p-4 text-sm font-bold text-emerald-800">{aviso}</p>}
-
-    <section className={`${card} p-4 sm:p-5`}>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div><h3 className="text-lg font-black">Equipos disponibles</h3><p className="mt-1 text-sm text-slate-500">Los equipos con un check-in abierto no se pueden volver a seleccionar.</p></div>
-        <button className={btnGhost} onClick={() => { setCargando(true); recargar().catch((e) => setError(textoError(e))).finally(() => setCargando(false)); }}><Icon name="search" size={18} />Actualizar lista</button>
-      </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_220px]">
-        <label className="relative"><Icon name="search" size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" /><input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} className={`${input} w-full pl-11`} placeholder="Buscar por código, placa o modelo" /></label>
-        <select value={tipo} onChange={(e) => setTipo(e.target.value)} className={`${input} w-full border-slate-200`}><option>Todos</option>{tipos.map((t) => <option key={t}>{t}</option>)}</select>
-      </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {visibles.map((e) => <button key={e.id} onClick={() => setSeleccionado(e.codigo)} className={`rounded-xl border-2 p-4 text-left transition ${seleccionado === e.codigo ? "border-[#F5B800] bg-[#F5B800]/10" : "border-slate-200 hover:border-slate-300"}`}>
-          <div className="flex items-start justify-between gap-2"><span className="font-black">{e.codigo}</span><Status type="ok">Disponible</Status></div>
-          <p className="mt-2 text-sm font-semibold text-slate-600">{e.tipo} · {e.marca}</p>
-          {e.placa && <p className="mt-1 text-xs text-slate-500">Placa {e.placa}</p>}
-          {e.horometro && <p className="mt-1 text-xs text-slate-500">Última lectura: {e.horometro} h</p>}
-        </button>)}
-      </div>
-      {visibles.length === 0 && <p className="py-8 text-center text-sm font-semibold text-slate-400">No hay equipos disponibles que coincidan con la búsqueda.</p>}
-      {seleccionado && <div className="mt-4 grid gap-3 rounded-xl bg-slate-50 p-4 sm:grid-cols-[1fr_auto] sm:items-end">
-        <Field label="Horómetro inicial *"><input type="number" min="0" step="0.01" value={horometroInicial} onChange={(e) => setHorometroInicial(e.target.value)} className={`${input} w-full border-slate-200`} placeholder="Lectura actual" /></Field>
-        <button disabled={guardando} onClick={iniciar} className={btnPrimary}><Icon name="check" size={18} />{guardando ? "Iniciando..." : "Iniciar check-in"}</button>
-      </div>}
-    </section>
-
-    {abiertos.length > 0 && <section className="mt-6">
-      <h3 className="mb-3 text-lg font-black">Usos en curso</h3>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {abiertos.map((c) => <article key={c.id} className={`${card} flex items-center justify-between gap-3 p-4`}>
-          <div><p className="font-black">{c.codigoEquipo}</p><p className="mt-1 text-sm text-slate-500">Inicio {fecha(c.iniciadoEn)} · Horómetro {c.horometroInicial} h</p></div>
-          <button onClick={() => void abrirCheckin(c)} className={`${btnGhost} h-10 px-3 text-xs`}>Continuar</button>
-        </article>)}
-      </div>
+    {aviso}
+    {usos.length > 0 && <section className="mb-8">
+      <h2 className="text-2xl font-black">Vehículo en uso</h2>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">{usos.map((c) => <button key={c.id} onClick={() => onContinuar(c)} className="flex items-center justify-between gap-2 rounded-2xl border-2 border-[#F5B800] bg-[#F5B800]/10 p-5 text-left">
+        <span className="text-2xl font-black">{c.codigoEquipo}</span><Icon name="arrow" size={22} />
+      </button>)}</div>
     </section>}
 
-    {checkinActivo && <section className={`${card} mt-6 overflow-hidden`}>
-      <div className="flex flex-col gap-3 border-b border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-        <div><p className="text-xs font-black uppercase tracking-wider text-[#8A6500]">Check-in abierto</p><h3 className="mt-1 text-lg font-black">{checkinActivo.codigoEquipo}</h3><p className="mt-1 text-sm text-slate-500">Inicio {fecha(checkinActivo.iniciadoEn)} · Horómetro inicial {checkinActivo.horometroInicial} h</p></div>
-        <button onClick={() => { setCheckinActivo(null); setLista(null); setInspeccion(null); }} className={`${btnGhost} h-10`}><Icon name="x" size={17} />Cerrar vista</button>
-      </div>
-      {cargandoLista ? <Cargando /> : !lista ? <p className="p-5 text-sm font-semibold text-slate-600">No fue posible cargar una lista vigente para este equipo.</p> : <>
-        <div className="p-4 sm:p-5">
-          <h4 className="text-lg font-black">{lista.nombre}</h4>
-          <p className="mt-1 text-sm font-semibold text-slate-500">Versión {lista.version} · {lista.secciones.reduce((n, s) => n + s.items.length, 0)} ítems</p>
-          {inspeccion ? <div className={`mt-4 rounded-xl p-4 ${inspeccion.esCritica ? "bg-red-50 text-red-800" : "bg-emerald-50 text-emerald-800"}`}>
-            <p className="font-black">{inspeccion.esCritica ? "Inspección con falla crítica" : "Inspección registrada"}</p>
-            <p className="mt-1 text-sm">Resultado: {inspeccion.esCritica ? "Con falla crítica" : "Completada"}</p>
-            <CargaEvidencias key={`inspection-${inspeccion.id}`} tipo="inspection" idRegistro={inspeccion.id} />
-          </div> : <div className="mt-4 space-y-4">
-            {lista.secciones.map((seccion, si) => <article key={`${seccion.titulo}-${si}`} className="overflow-hidden rounded-xl border border-slate-200">
-              <h5 className="bg-slate-50 px-4 py-3 font-black">{seccion.titulo}</h5>
-              <div className="divide-y divide-slate-100">{seccion.items.map((item) => <div key={item.id} className="p-4">
-                <div className="flex flex-wrap items-center gap-2"><p className="flex-1 font-bold">{item.texto}</p>{item.critico && <Status type="danger">Crítico</Status>}</div>
-                <div className="mt-3 grid grid-cols-3 gap-2">{RESPUESTAS.map((r) => <button key={r.valor} aria-pressed={respuestas[item.id] === r.valor} onClick={() => setRespuestas({ ...respuestas, [item.id]: r.valor })} className={`min-h-10 rounded-lg border px-2 text-xs font-black sm:text-sm ${respuestas[item.id] === r.valor ? r.valor === "does_not_comply" ? "border-red-500 bg-red-50 text-red-700" : "border-[#F5B800] bg-[#F5B800]/15 text-[#684C00]" : "border-slate-200 text-slate-500"}`}>{r.etiqueta}</button>)}</div>
-                <input value={observaciones[item.id] ?? ""} onChange={(e) => setObservaciones({ ...observaciones, [item.id]: e.target.value })} className={`${input} mt-3 w-full border-slate-200`} placeholder="Observación para este ítem (opcional)" />
-              </div>)}</div>
-            </article>)}
-            <Field label="Observación general (opcional)"><textarea value={observacionGeneral} onChange={(e) => setObservacionGeneral(e.target.value)} className={`${input} min-h-24 w-full resize-y border-slate-200 py-3`} /></Field>
-            <button disabled={guardando} onClick={guardarInspeccion} className={`${btnPrimary} w-full sm:w-auto`}><Icon name="check" size={18} />{guardando ? "Enviando..." : "Enviar inspección"}</button>
-          </div>}
-          {puedeReportar && <div className="mt-5 flex flex-col gap-3 border-t border-slate-200 pt-4 sm:flex-row">
-            <button onClick={() => reportar("novedad")} className={btnGhost}>Registrar novedad de este equipo</button>
-            <button onClick={() => reportar("incidente")} className={btnGhost}>Registrar incidente de este equipo</button>
-          </div>}
-        </div>
-      </>}
-      <div className="border-t border-slate-200 bg-slate-50 p-4 sm:p-5">
-        <h4 className="font-black">Finalizar uso del equipo</h4>
-        <p className="mt-1 text-sm text-slate-500">Registra la lectura del horómetro al terminar la operación.</p>
-        <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
-          <Field label="Horómetro final *"><input type="number" min={Number(checkinActivo.horometroInicial)} step="0.01" value={horometroFinal} onChange={(e) => setHorometroFinal(e.target.value)} className={`${input} w-full border-slate-200`} placeholder="Lectura final" /></Field>
-          <button disabled={guardando} onClick={cerrarCheckin} className={`${btnGhost} border-red-200 text-red-700`}>{guardando ? "Guardando..." : "Finalizar uso"}</button>
-        </div>
-      </div>
-    </section>}
+    <h2 className="text-2xl font-black">Elige el vehículo</h2>
+    <p className="mt-1 text-base text-slate-500">Toca el vehículo que vas a revisar.</p>
+    <div className="mt-4 flex gap-2 overflow-x-auto pb-1">{["Todos", ...tipos].map((t) => <button key={t} onClick={() => setTipo(t)} className={`h-11 shrink-0 rounded-full border-2 px-4 text-sm font-black ${tipo === t ? "border-[#2B2B2B] bg-[#2B2B2B] text-white" : "border-slate-200 bg-white text-slate-600"}`}>{t}</button>)}</div>
+    {equipos.length > 6 && <label className="relative mt-3 block"><Icon name="search" size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" /><input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} className={`${input} min-h-14 w-full border-slate-200 pl-12 text-base`} placeholder="Buscar por código o placa" /></label>}
+    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{visibles.map((e) => <button key={e.id} onClick={() => onElegir(e)} className={`${card} flex items-center gap-4 p-5 text-left transition hover:border-[#F5B800] hover:shadow-md`}>
+      <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-[#F5B800]/15 text-[#8A6500]"><Icon name="equipment" size={24} /></span>
+      <span className="min-w-0 flex-1"><span className="block text-xl font-black">{e.codigo}</span><span className="mt-0.5 block truncate text-base font-semibold text-slate-600">{e.tipo} · {e.marca}</span>{e.placa && <span className="block text-sm text-slate-500">Placa {e.placa}</span>}</span>
+      <Icon name="arrow" size={20} className="shrink-0 text-slate-400" />
+    </button>)}</div>
+    {visibles.length === 0 && <p className="rounded-2xl bg-white p-10 text-center text-base font-semibold text-slate-400">No hay vehículos disponibles{tipo !== "Todos" || busqueda ? " con ese filtro" : " en este momento"}.</p>}
   </>;
+}
+
+function Inspeccion({ lista, codigo, borrador, setBorrador, guardando, aviso, onVolver, onFinalizar }: {
+  lista: ListaOperativa; codigo: string; borrador: Borrador; setBorrador: (b: Borrador) => void; guardando: boolean; aviso: React.ReactNode; onVolver: () => void; onFinalizar: () => void;
+}) {
+  const items = lista.secciones.flatMap((s) => s.items);
+  const respondidos = items.filter((i) => borrador.respuestas[i.id]).length;
+  const responder = (id: string, r: Respuesta) => setBorrador({ ...borrador, respuestas: { ...borrador.respuestas, [id]: r } });
+
+  return <div className="mx-auto max-w-3xl">
+    <button onClick={onVolver} className="mb-4 flex min-h-12 items-center gap-2 rounded-xl px-2 text-base font-black text-[#8A6500] hover:bg-[#F5B800]/10"><span className="rotate-180"><Icon name="arrow" size={20} /></span>Volver al vehículo</button>
+    <div className="sticky top-[72px] z-10 -mx-4 mb-4 border-b border-slate-200 bg-[#F5F6F7]/95 px-4 py-3 backdrop-blur sm:top-[84px] sm:mx-0 sm:rounded-2xl sm:border sm:bg-white sm:px-5">
+      <p className="text-sm font-black uppercase tracking-wider text-[#8A6500]">Inspección de {codigo}</p>
+      <div className="mt-2 flex items-center gap-3"><div className="h-3 flex-1 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-[#F5B800] transition-all" style={{ width: `${items.length ? (respondidos / items.length) * 100 : 0}%` }} /></div><span className="shrink-0 text-base font-black">{respondidos} de {items.length}</span></div>
+    </div>
+    {items.length === 0 && <p className={`${card} p-6 text-base font-semibold text-slate-500`}>La lista de este vehículo no tiene ítems. Avisa al administrador.</p>}
+    <div className="space-y-5">{lista.secciones.map((s, si) => <section key={`${s.titulo}-${si}`} className={`${card} overflow-hidden`}>
+      <h3 className="bg-slate-50 px-5 py-4 text-xl font-black">{s.titulo}</h3>
+      <div className="divide-y divide-slate-100">{s.items.map((item) => { const r = borrador.respuestas[item.id]; const nota = borrador.notas[item.id] ?? ""; return <div key={item.id} id={`item-${item.id}`} className="p-5">
+        <div className="flex flex-wrap items-start gap-2"><p className="flex-1 text-lg font-bold">{item.texto}</p>{item.critico && <Status type="danger">Crítico</Status>}</div>
+        <div className="mt-3 grid grid-cols-3 gap-2">{RESPUESTAS.map((op) => <button key={op.valor} aria-pressed={r === op.valor} onClick={() => responder(item.id, op.valor)} className={`min-h-14 rounded-xl border-2 px-1 text-sm font-black sm:text-base ${r === op.valor ? op.activo : "border-slate-200 bg-white text-slate-600"}`}>{op.etiqueta}</button>)}</div>
+        {r === "does_not_comply" && <div className="mt-3">
+          {item.critico && <p className="mb-2 flex gap-2 rounded-lg bg-red-50 p-3 text-sm font-bold text-red-700"><Icon name="warning" size={18} className="shrink-0" />Ítem crítico: no operes el vehículo y avisa al jefe de taller.</p>}
+          <label className="block text-base font-black text-red-700">¿Qué pasó? Describe el problema *</label>
+          <textarea value={nota} onChange={(e) => setBorrador({ ...borrador, notas: { ...borrador.notas, [item.id]: e.target.value } })} className={`${input} mt-2 min-h-24 w-full resize-y py-3 text-base ${nota.trim() ? "border-slate-200" : "border-red-300"}`} placeholder="Ej. La llanta delantera derecha está desinflada" />
+        </div>}
+      </div>; })}</div>
+    </section>)}</div>
+
+    <div className="mt-5">{aviso}</div>
+    <button disabled={guardando} onClick={onFinalizar} className={`${btnPrimary} h-16 w-full text-lg`}><Icon name="check" size={22} />{guardando ? "Guardando…" : "Finalizar inspección"}</button>
+    <p className="mt-2 text-center text-sm font-semibold text-slate-500">Todavía no se envía: se guarda y la envías al final de la jornada con el horómetro final.</p>
+  </div>;
 }

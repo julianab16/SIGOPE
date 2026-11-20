@@ -9,9 +9,12 @@
 import {
   MODULOS,
   type CheckIn,
+  type DatosEquipoNuevo,
+  type DatosUsuario,
   type Equipo,
   type EstadoEquipo,
   type EvidenciaAdjunta,
+  type ItemBanco,
   type ListaInspeccion,
   type ListaOperativa,
   type Modulo,
@@ -40,8 +43,8 @@ export type Api = {
   };
   usuarios: {
     listar(): Promise<Usuario[]>;
-    crear(datos: Omit<Usuario, "id">): Promise<UsuarioCreado>;
-    actualizar(id: number, datos: Partial<Usuario>): Promise<Usuario>;
+    crear(datos: DatosUsuario): Promise<UsuarioCreado>;
+    actualizar(id: number, datos: Partial<DatosUsuario>): Promise<Usuario>;
     /** Devuelve la contraseña temporal generada. */
     restablecerClave(id: number): Promise<string>;
   };
@@ -58,19 +61,30 @@ export type Api = {
   };
   equipos: {
     listar(): Promise<Equipo[]>;
-    crear(datos: Omit<Equipo, "id" | "modificado">): Promise<Equipo>;
-    actualizar(id: string, datos: Partial<Equipo>): Promise<Equipo>;
+    crear(datos: DatosEquipoNuevo): Promise<Equipo>;
+    /** El código y el tipo no se pueden cambiar: el código se generó con ellos. */
+    actualizar(id: string, datos: Partial<Omit<Equipo, "id" | "codigo" | "tipo" | "modificado">>): Promise<Equipo>;
   };
   listas: {
     listar(): Promise<ListaInspeccion[]>;
     crear(tipo: string): Promise<ListaInspeccion>;
-    actualizar(id: string, datos: Pick<ListaInspeccion, "secciones">): Promise<ListaInspeccion>;
+    /** Reemplaza el contenido de la lista por estos ítems del banco, en este orden (crea una versión nueva). */
+    actualizar(id: string, itemIds: string[]): Promise<ListaInspeccion>;
+    /** El backend no deja borrar una lista que ya tiene inspecciones. */
+    eliminar(id: string): Promise<void>;
+  };
+  banco: {
+    listar(): Promise<ItemBanco[]>;
+    /** Agrega un ítem al banco; si la categoría no existe, se crea. */
+    crear(datos: Omit<ItemBanco, "id">): Promise<ItemBanco>;
   };
   operacion: {
     equiposDisponibles(): Promise<Equipo[]>;
     checkins(): Promise<CheckIn[]>;
     iniciarCheckin(codigo: string, horometroInicial: number): Promise<CheckIn>;
-    cerrarCheckin(id: number, horometroFinal: number): Promise<CheckIn>;
+    /** Registra el horómetro final y envía la inspección que estaba pendiente. */
+    cerrarCheckin(id: number, horometroFinal: number, observacionGeneral?: string): Promise<CheckIn>;
+    equipo(codigo: string): Promise<Equipo>;
     listaParaEquipo(codigo: string): Promise<ListaOperativa>;
     inspeccionParaCheckin(checkin: CheckIn): Promise<ResultadoInspeccion | null>;
     registrarInspeccion(datos: {
@@ -79,6 +93,8 @@ export type Api = {
       checkin: number;
       respuestas: { item: string; resultado: "complies" | "does_not_comply" | "not_applicable"; observacion: string }[];
       observacionGeneral: string;
+      /** true: queda guardada en el servidor, pendiente de envío hasta cerrar el uso. */
+      pendiente?: boolean;
     }): Promise<ResultadoInspeccion>;
     registrarNovedad(datos: { equipo: string; tipo: TipoNovedad; descripcion: string; observacion: string }): Promise<RegistroOperativo>;
     registrarIncidente(datos: { equipo: string; ocurridoEn: string; descripcion: string; severidad: SeveridadIncidente }): Promise<RegistroOperativo>;
@@ -94,13 +110,15 @@ export const usaDatosDePrueba = !API_URL;
 // ---------------------------------------------------------------------------
 
 type NivelApi = "none" | "view" | "manage";
-type UsuarioApi = { id: number; username: string; full_name: string; document: string; role: string; role_name: string; is_active: boolean; temporary_password?: string };
+type UsuarioApi = { id: number; username: string; full_name: string; document: string; role: string; role_name: string; is_active: boolean; licenses?: string[]; temporary_password?: string };
 type SesionApi = { access: string; refresh: string; user: { username: string; full_name: string; role_name: string; is_admin: boolean; must_change_password: boolean; permissions: Record<string, NivelApi> } };
 type RolApi = { id: number; code: string; name: string; is_base: boolean; permissions: Record<string, NivelApi> };
-type TipoApi = { id: number; name: string; description: string; is_active: boolean };
+type TipoApi = { id: number; name: string; description: string; is_active: boolean; required_license?: string };
+type ItemApi = { identifier: string; name: string; category: number; is_critical: boolean; is_active: boolean };
+type CategoriaApi = { id: number; name: string; is_active: boolean };
 type EquipoApi = { identifier: string; plate: string; equipment_type: number; equipment_type_name: string; status: string; model: string; serial_number: string; year: number | null; hour_meter: string; last_modified_by: string | null; last_modified_at: string | null };
 type ListaApi = { identifier: string; name: string; version: number; equipment_types_detail: { id: number; name: string }[]; sections: { title: string; items: { identifier: string; text: string; is_critical: boolean }[] }[] };
-type CheckInApi = { id: number; equipment: string; equipment_code: string; hour_meter_start: string; hour_meter_end: string; checked_in_at: string; closed_at: string | null; checklist_id: string | null };
+type CheckInApi = { id: number; equipment: string; equipment_code: string; hour_meter_start: string; hour_meter_end: string; checked_in_at: string; closed_at: string | null; checklist_id: string | null; inspection?: { id: number; status: string; global_result: string; es_critica: boolean } | null };
 type InspeccionApi = { id: number; checkin: number | null; global_result: string; es_critica: boolean };
 type RegistroApi = { id: number; estado: string; performed_at: string };
 type EvidenciaApi = { id: number; record_type: TipoRegistroOperativo; record_id: number; url: string; file: string };
@@ -122,11 +140,12 @@ const ESTADO_FRONT = Object.fromEntries(Object.entries(ESTADO_API).map(([k, v]) 
 
 // Nombre del campo en el backend → nombre en el front (para los errores por campo)
 type Campos = Record<string, string>;
-const CAMPOS_USUARIO: Campos = { full_name: "nombre", document: "documento", username: "usuario", role: "rol", is_active: "activo", password: "clave" };
+const CAMPOS_USUARIO: Campos = { full_name: "nombre", document: "documento", username: "usuario", role: "rol", is_active: "activo", password: "clave", licenses: "licencias" };
 const CAMPOS_ROL: Campos = { name: "nombre" };
-const CAMPOS_TIPO: Campos = { name: "nombre", description: "descripcion", is_active: "activo" };
-const CAMPOS_EQUIPO: Campos = { identifier: "codigo", plate: "placa", equipment_type: "tipo", model: "marca", serial_number: "serie", year: "anio", hour_meter: "horometro", status: "estado" };
-const CAMPOS_LISTA: Campos = { equipment_types: "tipo", sections: "secciones", name: "nombre" };
+const CAMPOS_TIPO: Campos = { name: "nombre", description: "descripcion", is_active: "activo", required_license: "licencia" };
+const CAMPOS_EQUIPO: Campos = { identifier: "codigo", number: "numero", plate: "placa", equipment_type: "tipo", model: "marca", serial_number: "serie", year: "anio", hour_meter: "horometro", status: "estado" };
+const CAMPOS_LISTA: Campos = { equipment_types: "tipo", item_orders: "items", sections: "items", name: "nombre" };
+const CAMPOS_ITEM: Campos = { name: "texto", category: "categoria", is_critical: "critico" };
 const CAMPOS_CLAVE: Campos = { current_password: "actual", new_password: "nueva" };
 
 /** Traduce un objeto con nombres del front a nombres del backend, solo con las claves presentes. */
@@ -140,9 +159,9 @@ function traducir<T extends object>(datos: T, campos: Campos, convertir: Partial
   return salida;
 }
 
-const aUsuario = (u: UsuarioApi): Usuario => ({ id: u.id, nombre: u.full_name || u.username, documento: u.document, usuario: u.username, rol: u.role_name, activo: u.is_active });
+const aUsuario = (u: UsuarioApi): Usuario => ({ id: u.id, nombre: u.full_name || u.username, documento: u.document, usuario: u.username, rol: u.role_name, activo: u.is_active, licencias: u.licenses ?? [] });
 const aRol = (r: RolApi): Rol => ({ id: r.id, nombre: r.name, base: r.is_base, permisos: Object.fromEntries(MODULOS.map((m) => [m, NIVEL_FRONT[r.permissions[MODULO_API[m]]] ?? "Sin acceso"])) as Record<Modulo, Nivel> });
-const aTipo = (t: TipoApi): TipoEquipo => ({ id: t.id, nombre: t.name, descripcion: t.description, activo: t.is_active });
+const aTipo = (t: TipoApi): TipoEquipo => ({ id: t.id, nombre: t.name, descripcion: t.description, activo: t.is_active, licencia: t.required_license ?? "" });
 const fecha = (iso: string) => new Date(iso).toLocaleString("es-CO", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 const aEquipo = (e: EquipoApi): Equipo => ({
   id: e.identifier,
@@ -159,8 +178,9 @@ const aEquipo = (e: EquipoApi): Equipo => ({
 const aLista = (l: ListaApi): ListaInspeccion => ({
   id: l.identifier,
   tipo: l.equipment_types_detail[0]?.name ?? l.name,
+  nombre: l.name,
   version: l.version,
-  secciones: l.sections.map((s) => ({ titulo: s.title, items: s.items.map((i) => ({ texto: i.text, critico: i.is_critical })) })),
+  secciones: l.sections.map((s) => ({ titulo: s.title, items: s.items.map((i) => ({ id: i.identifier, texto: i.text, critico: i.is_critical })) })),
 });
 const aCheckIn = (c: CheckInApi): CheckIn => ({
   id: c.id,
@@ -171,6 +191,7 @@ const aCheckIn = (c: CheckInApi): CheckIn => ({
   iniciadoEn: c.checked_in_at,
   finalizadoEn: c.closed_at,
   listaId: c.checklist_id,
+  inspeccion: c.inspection ? { id: c.inspection.id, resultadoGlobal: c.inspection.global_result, esCritica: c.inspection.es_critica, pendiente: c.inspection.status === "in_progress" } : null,
 });
 const aRegistro = (r: RegistroApi): RegistroOperativo => ({ id: r.id, estado: r.estado, creadoEn: r.performed_at });
 const aEvidencia = (e: EvidenciaApi): EvidenciaAdjunta => ({
@@ -268,15 +289,16 @@ async function idDeTipo(nombre: string) {
   return tipo.id;
 }
 
-async function datosUsuario(d: Partial<Usuario>) {
-  const salida = traducir(d, CAMPOS_USUARIO);
+async function datosUsuario(d: Partial<DatosUsuario>) {
+  // El usuario (login) no se envía: lo genera el backend con el nombre y la cédula.
+  const salida = traducir(d, { ...CAMPOS_USUARIO, username: "" });
   if (d.rol !== undefined) salida.role = await codigoDeRol(d.rol);
   return salida;
 }
 
-async function datosEquipo(d: Partial<Equipo>) {
-  const salida = traducir(d, CAMPOS_EQUIPO, {
-    codigo: (v: string) => v.trim().toUpperCase(),
+async function datosEquipo(d: Partial<DatosEquipoNuevo>) {
+  // El código no se envía: el backend lo arma con el tipo y el número.
+  const salida = traducir(d, { ...CAMPOS_EQUIPO, identifier: "" }, {
     placa: (v: string) => v.trim().toUpperCase(),
     anio: (v: string) => (v ? Number(v) : null),
     estado: (v: EstadoEquipo) => ESTADO_API[v],
@@ -338,10 +360,29 @@ const httpApi: Api = {
   },
   listas: {
     listar: async () => (await http<ListaApi[]>("GET", "/catalog/checklists/")).map(aLista),
-    crear: async (tipo) => aLista(await http<ListaApi>("POST", "/catalog/checklists/", { equipment_types: [await idDeTipo(tipo)], sections: [] }, CAMPOS_LISTA)),
-    actualizar: async (id, { secciones }) => {
-      const sections = secciones.map((s) => ({ title: s.titulo, items: s.items.map((i) => ({ text: i.texto, is_critical: !!i.critico })) }));
-      return aLista(await http<ListaApi>("PATCH", `/catalog/checklists/${encodeURIComponent(id)}/`, { sections }, CAMPOS_LISTA));
+    crear: async (tipo) => aLista(await http<ListaApi>("POST", "/catalog/checklists/", { equipment_types: [await idDeTipo(tipo)], item_orders: [] }, CAMPOS_LISTA)),
+    actualizar: async (id, itemIds) => {
+      const item_orders = itemIds.map((item, i) => ({ item, position: i + 1 }));
+      return aLista(await http<ListaApi>("PATCH", `/catalog/checklists/${encodeURIComponent(id)}/`, { item_orders }, CAMPOS_LISTA));
+    },
+    eliminar: (id) => http("DELETE", `/catalog/checklists/${encodeURIComponent(id)}/`),
+  },
+  banco: {
+    async listar() {
+      const [items, categorias] = await Promise.all([
+        http<ItemApi[]>("GET", "/catalog/items/?is_active=true"),
+        http<CategoriaApi[]>("GET", "/catalog/item-categories/"),
+      ]);
+      const nombre = new Map(categorias.map((c) => [c.id, c.name]));
+      return items.map((i) => ({ id: i.identifier, texto: i.name, categoria: nombre.get(i.category) ?? "Sin categoría", critico: i.is_critical }));
+    },
+    async crear({ texto, categoria, critico }) {
+      const titulo = categoria.trim();
+      const categorias = await http<CategoriaApi[]>("GET", "/catalog/item-categories/");
+      const existente = categorias.find((c) => c.name.toLowerCase() === titulo.toLowerCase());
+      const cat = existente ?? (await http<CategoriaApi>("POST", "/catalog/item-categories/", { name: titulo, is_active: true }, { name: "categoria" }));
+      const i = await http<ItemApi>("POST", "/catalog/items/", { name: texto.trim(), category: cat.id, is_critical: critico, is_active: true }, CAMPOS_ITEM);
+      return { id: i.identifier, texto: i.name, categoria: cat.name, critico: i.is_critical };
     },
   },
   operacion: {
@@ -360,12 +401,13 @@ const httpApi: Api = {
       { equipment: codigo, hour_meter_start: horometroInicial },
       { equipment: "equipo", hour_meter_start: "horometroInicial" },
     )),
-    cerrarCheckin: async (id, horometroFinal) => aCheckIn(await http<CheckInApi>(
+    cerrarCheckin: async (id, horometroFinal, observacionGeneral) => aCheckIn(await http<CheckInApi>(
       "POST",
       `/inspections/checkins/${id}/close/`,
-      { hour_meter_end: horometroFinal },
-      { hour_meter_end: "horometroFinal" },
+      { hour_meter_end: horometroFinal, ...(observacionGeneral !== undefined ? { general_notes: observacionGeneral } : {}) },
+      { hour_meter_end: "horometroFinal", general_notes: "observacionGeneral" },
     )),
+    equipo: async (codigo) => aEquipo(await http<EquipoApi>("GET", `/catalog/equipments/${encodeURIComponent(codigo)}/`)),
     async listaParaEquipo(codigo) {
       const equipo = await http<EquipoApi>("GET", `/catalog/equipments/${encodeURIComponent(codigo)}/`);
       const listas = await http<ListaApi[]>(
@@ -402,6 +444,7 @@ const httpApi: Api = {
         checklist: datos.lista,
         checkin: datos.checkin,
         general_notes: datos.observacionGeneral,
+        ...(datos.pendiente ? { status: "in_progress" } : {}),
         responses: datos.respuestas.map((r) => ({ item: r.item, result: r.resultado, notes: r.observacion })),
       }, { equipment: "equipo", checklist: "lista", checkin: "checkin", responses: "respuestas", general_notes: "observacionGeneral" });
       return { id: inspeccion.id, resultadoGlobal: inspeccion.global_result, esCritica: inspeccion.es_critica };

@@ -441,3 +441,68 @@ class InspectionApiTests(APITestCase):
 
         self.assertEqual(sixth_response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(Evidence.objects.count(), 5)
+
+    # --- Inspección pendiente de envío: se hace al iniciar el uso y se envía al cerrarlo ---
+
+    def start_checkin(self, hour_meter="100"):
+        response = self.client.post(
+            "/api/inspections/checkins/",
+            {"equipment": self.equipment.identifier, "hour_meter_start": hour_meter},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        return response.data["id"]
+
+    def test_pending_inspection_is_sent_when_checkin_is_closed(self):
+        checkin_id = self.start_checkin()
+        pending = self.create_inspection(checkin=checkin_id, status="in_progress")
+        self.assertEqual(pending.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(pending.data["status"], Inspection.Status.IN_PROGRESS)
+
+        listed = self.client.get("/api/inspections/checkins/")
+        self.assertEqual(listed.data[0]["inspection"]["status"], Inspection.Status.IN_PROGRESS)
+
+        closed = self.client.post(
+            f"/api/inspections/checkins/{checkin_id}/close/",
+            {"hour_meter_end": "100", "general_notes": " No se usó por las fallas encontradas. "},
+            format="json",
+        )
+
+        self.assertEqual(closed.status_code, status.HTTP_200_OK)
+        self.assertEqual(closed.data["inspection"]["status"], Inspection.Status.COMPLETED)
+        sent = Inspection.objects.get(pk=pending.data["id"])
+        self.assertEqual(sent.status, Inspection.Status.COMPLETED)
+        self.assertEqual(sent.general_notes, "No se usó por las fallas encontradas.")
+
+    def test_pending_inspection_requires_an_open_checkin(self):
+        without_checkin = self.create_inspection(status="in_progress")
+        checkin_id = self.start_checkin()
+        self.client.post(
+            f"/api/inspections/checkins/{checkin_id}/close/", {"hour_meter_end": "100"}, format="json"
+        )
+        closed_checkin = self.create_inspection(checkin=checkin_id, status="in_progress")
+
+        self.assertEqual(without_checkin.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(closed_checkin.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_pending_inspection_is_hidden_from_supervisors_until_sent(self):
+        checkin_id = self.start_checkin()
+        self.create_inspection(checkin=checkin_id, status="in_progress")
+        supervisor = User.objects.create_user(
+            username="supervisor", password="Supervisor-password-123", document="30000009",
+            full_name="Super Visor", role=User.Role.ADMINISTRADOR,
+        )
+
+        own = self.client.get("/api/inspections/records/")
+        self.client.force_authenticate(supervisor)
+        before = self.client.get("/api/inspections/records/")
+        self.client.force_authenticate(self.operator)
+        self.client.post(
+            f"/api/inspections/checkins/{checkin_id}/close/", {"hour_meter_end": "101"}, format="json"
+        )
+        self.client.force_authenticate(supervisor)
+        after = self.client.get("/api/inspections/records/")
+
+        self.assertEqual(len(own.data), 1)
+        self.assertEqual(len(before.data), 0)
+        self.assertEqual(len(after.data), 1)

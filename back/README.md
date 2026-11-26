@@ -585,6 +585,14 @@ curl "$BASE/api/inspections/evidence/15/" -H "$AUTH"
 | `GET`, `PATCH`, `DELETE` | `/api/maintenance/{id}/` | Consulta, edita o elimina un mantenimiento. |
 | `PUT` | `/api/maintenance/{id}/assign/` | Asigna responsables con `{"responsible_ids":[2,3]}`. |
 | `POST` | `/api/maintenance/{id}/reschedule/` | Reprograma con `scheduled_date` y `reason`. |
+| `POST` | `/api/maintenance/{id}/status/` | Cambia a `en_ejecucion` o `cancelado`; cancelación requiere `reason`. El estado `finalizado` solo se establece mediante `/finish/`. |
+| `POST` | `/api/maintenance/{id}/finish/` | Finaliza con `final_observations` opcional y `out_of_service` opcional (booleano). Requiere una actividad. |
+| `GET` | `/api/maintenance/equipment/{equipment_id}/history/` | Historial cronológico descendente. Filtros opcionales: `date_from`, `date_to`, `maintenance_type`. |
+| `GET`, `POST` | `/api/maintenance/activities/` | Consulta o registra actividades; al crear requiere `maintenance`, `description` y `performed_on`. |
+| `GET`, `PATCH`, `DELETE` | `/api/maintenance/activities/{id}/` | Consulta o modifica/elimina actividad mientras el mantenimiento esté abierto. |
+| `GET`, `POST` | `/api/maintenance/materials/` | Consulta o registra materiales; al crear requiere `maintenance`, `description` y `quantity` positiva. |
+| `GET`, `PATCH`, `DELETE` | `/api/maintenance/materials/{id}/` | Consulta o modifica/elimina material mientras el mantenimiento esté abierto. |
+| `POST` | `/api/evidence/` | Evidencias reutilizan el módulo compartido; usar `record_type: "maintenance"` y `record_id` del mantenimiento. Se conservan límites existentes (JPG/JPEG/PNG/PDF, 5 MB, máximo 5 archivos). |
 
 ```bash
 curl -X POST "$BASE/api/maintenance/" -H "$AUTH" \
@@ -597,6 +605,16 @@ curl -X PUT "$BASE/api/maintenance/4/assign/" -H "$AUTH" \
 curl -X POST "$BASE/api/maintenance/4/reschedule/" -H "$AUTH" \
     -H 'Content-Type: application/json' \
     -d '{"scheduled_date":"2026-12-05","reason":"Disponibilidad de repuestos"}'
+
+curl -X POST "$BASE/api/maintenance/4/status/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"status":"en_ejecucion"}'
+
+curl -X POST "$BASE/api/maintenance/4/finish/" -H "$AUTH" \
+    -H 'Content-Type: application/json' \
+    -d '{"final_observations":"Prueba satisfactoria","out_of_service":false}'
+
+curl "$BASE/api/maintenance/equipment/CAM-01/history/?date_from=2026-01-01&maintenance_type=preventivo" -H "$AUTH"
 ```
 
 #### Esquema y administración

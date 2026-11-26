@@ -1,10 +1,8 @@
 from django.contrib.contenttypes.models import ContentType
 from rest_framework import serializers
-
 from inspections.models import Inspection
-
+from maintenance.models import Maintenance
 from .models import Evidence, Incident, News
-
 
 class NewsSerializer(serializers.ModelSerializer):
     performed_by = serializers.PrimaryKeyRelatedField(source="reported_by", read_only=True)
@@ -50,7 +48,7 @@ class IncidentSerializer(serializers.ModelSerializer):
 
 
 class EvidenceSerializer(serializers.ModelSerializer):
-    record_type = serializers.ChoiceField(choices=("inspection", "news", "incident"), write_only=True)
+    record_type = serializers.ChoiceField(choices=("inspection", "news", "incident", "maintenance"), write_only=True)
     record_id = serializers.IntegerField(write_only=True)
     url = serializers.FileField(source="file", read_only=True)
 
@@ -65,6 +63,7 @@ class EvidenceSerializer(serializers.ModelSerializer):
             "inspection": "inspection",
             "news": "news",
             "incident": "incident",
+            "maintenance": "maintenance",
         }.get(instance.content_type.model, instance.content_type.model)
         data["record_id"] = instance.object_id
         return data
@@ -75,12 +74,14 @@ class EvidenceSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"file": "El archivo no puede superar 5 MB."})
         if file and file.name.lower().rsplit(".", 1)[-1] not in Evidence.ALLOWED_EXTENSIONS:
             raise serializers.ValidationError({"file": "Solo se permiten archivos JPG, PNG o PDF."})
-        model = {"inspection": Inspection, "news": News, "incident": Incident}[attrs["record_type"]]
+        model = {"inspection": Inspection, "news": News, "incident": Incident, "maintenance": Maintenance}[attrs["record_type"]]
         try:
             target = model.objects.get(pk=attrs["record_id"])
         except model.DoesNotExist:
             raise serializers.ValidationError({"record_id": "El registro no existe."})
         content_type = ContentType.objects.get_for_model(model)
+        if model is Maintenance and target.status in (Maintenance.Status.FINISHED, Maintenance.Status.CANCELLED):
+            raise serializers.ValidationError({"record_id": "No se pueden agregar evidencias a un mantenimiento cerrado."})
         if Evidence.objects.filter(content_type=content_type, object_id=target.pk).count() >= 5:
             raise serializers.ValidationError({"file": "Un registro puede tener máximo 5 archivos."})
         attrs["content_type"] = content_type
